@@ -136,7 +136,7 @@ let S={tracks:[],cues:{},def:{fade:4,in:0,out:0,auto:true},liked:[],pls:[],hifi:
     tab="lib",mood="calm",en=.5,ai=[],pv="",aiSrc="all",sq="",sres=[],sel="",toast="",shuf=false,rep=true,npOpen=false,npDrawer="",seeking=false;
 
 try{const x=JSON.parse(localStorage.getItem("dk")||"null");if(x)S={...S,...x}}catch(e){}
-S.tracks=S.tracks.filter(t=>t.file);S.online=(S.online||[]).filter(x=>x.resolvedFull);S.thr=S.thr||{s:-25,m:-15,e:-28};
+S.tracks=S.tracks.filter(t=>t.file);S.online=(S.online||[]).filter(x=>x.verifiedFull);S.thr=S.thr||{s:-25,m:-15,e:-28};
 const save=()=>{try{localStorage.setItem("dk",JSON.stringify(S))}catch(e){}};
 const T=id=>S.tracks.find(t=>t.id===id)||S.online.find(t=>t.id===id),$=s=>document.querySelector(s);
 const cue=id=>({...(S.def.auto?{in:S.def.in,out:S.def.out,fade:S.def.fade}:{in:0,out:0,fade:0}),...(S.cues[id]||{})});
@@ -220,124 +220,91 @@ function renderDrawer(){
 
 // Multi-Platform Discovery + Full-Length Stream Resolver
 async function resolvePlayableUrl(t){
-  if(t.file||t.resolvedFull)return t.url;
-  const q=encodeURIComponent(t.title+" "+t.artist);
-  $("#mt").textContent="Loading full track…";
-
-  // 1. Saavn / Music CDN API (Direct full-length MP4/AAC links, no 403 block)
-  const trySaavn = async (base) => {
-    const r=await fetch(base+"/api/search/songs?query="+q+"&limit=3",{signal:AbortSignal.timeout(6000)});
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    const list=(j.data&&j.data.results)||j.results||[];
-    for(const s of list){
-      const dl=s.downloadUrl||[];
-      const best=dl[dl.length-1];
-      const u=best&&(best.url||best.link);
-      if(u)return{url:u,dur:Number(s.duration)||t.dur||210};
-    }
-    throw 0;
-  };
-
-  // 2. Piped with proxy support
-  const tryPiped = async (u) => {
-    const r=await fetch(u+"/search?q="+q+"&filter=videos",{signal:AbortSignal.timeout(6000)});
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    const item=(j.items||[]).find(x=>x.url&&x.url.includes("v="));
-    if(!item)throw 0;
-    const vid=item.url.split("v=")[1].split("&")[0];
-    const sr=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(6000)});
-    if(!sr.ok)throw 0;
-    const sj=await sr.json();
-    const a=(sj.audioStreams||[]).filter(x=>x.url).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
-    if(!a||!a.url)throw 0;
-    return{url:a.url,dur:sj.duration||t.dur||210};
-  };
-
-  // 3. Audius Open Stream
-  const tryAudius = async () => {
-    const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit=1",{signal:AbortSignal.timeout(6000)});
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    const d=j.data&&j.data[0];
-    if(!d)throw 0;
-    return{url:"https://discoveryprovider.audius.co/v1/tracks/"+d.id+"/stream",dur:d.duration||210};
-  };
-
-  try{
-    const res = await Promise.any([
-      trySaavn("https://saavn.dev"),
-      trySaavn("https://jiosaavn-api-privatecvc2.vercel.app"),
-      tryPiped("https://pipedapi.kavin.rocks"),
-      tryPiped("https://api.piped.yt"),
-      tryAudius()
-    ]);
-    t.url=res.url;t.dur=res.dur;t.resolvedFull=1;t.full=1;save();
-    return t.url;
-  }catch(e){
-    return t.url;
-  }
+  return t.url;
 }
 
 async function saveOffline(id){
   const t=S.online.find(x=>x.id===id);if(!t)return;
-  toast="Fetching full audio for "+t.title+"…";ui();view();
+  toast="Downloading full track: "+t.title+"…";ui();view();
   try{
-    const u=await resolvePlayableUrl(t);
-    const r=await fetch(u);const b=await r.blob();
+    const r=await fetch(t.url);const b=await r.blob();
     const nid="f"+Date.now();await idb("put",nid,b);
-    S.tracks.push({id:nid,key:t.id,title:t.title,artist:t.artist,mood:t.mood,energy:t.energy,bpm:t.bpm,art:t.art||"",file:1,dur:t.dur||180});
+    S.tracks.push({id:nid,key:t.id,title:t.title,artist:t.artist,mood:t.mood,energy:t.energy,bpm:t.bpm,art:t.art||"",file:1,dur:t.dur||210});
     save();toast="Saved offline: "+t.title;ui();view();
-  }catch(e){toast="Download blocked by stream host.";ui();view()}
-}
-
-function deezerJSONP(term,n){
-  return new Promise(res=>{
-    const cb="dz_"+Date.now()+"_"+Math.floor(Math.random()*999);
-    const sc=document.createElement("script");
-    const timer=setTimeout(()=>{delete window[cb];sc.remove();res([])},4000);
-    window[cb]=d=>{clearTimeout(timer);delete window[cb];sc.remove();res((d&&d.data)||[])};
-    sc.src="https://api.deezer.com/search?q="+encodeURIComponent(term)+"&limit="+n+"&output=jsonp&callback="+cb;
-    sc.onerror=()=>{clearTimeout(timer);delete window[cb];sc.remove();res([])};
-    document.head.appendChild(sc);
-  });
+  }catch(e){toast="Download failed: "+e.message;ui();view()}
 }
 
 async function search(term,n,m,en,platform="all"){
   if(S.offlineOnly)return[];
+  const q=encodeURIComponent(term);
   const o=[];
-  // Fast Metadata from Apple Music (iTunes)
-  if(platform==="all"||platform==="apple"||platform==="spotify"||platform==="ytm"){
+
+  // 1. Saavn Full-Length MP4/AAC CDN (Multiple mirrors, CORS enabled, full songs)
+  const saavnMirrors=["https://saavn.dev","https://jiosaavn-api-privatecvc2.vercel.app","https://saavn.sumit.co"];
+  for(const base of saavnMirrors){
+    if(o.length>=n)break;
     try{
-      const r=await fetch("https://itunes.apple.com/search?media=music&country=PH&limit="+n+"&term="+encodeURIComponent(term),{signal:AbortSignal.timeout(4500)});
+      const r=await fetch(base+"/api/search/songs?query="+q+"&limit="+n,{signal:AbortSignal.timeout(5000)});
+      if(!r.ok)continue;
       const j=await r.json();
-      for(const x of j.results||[]){
-        if(!x.previewUrl)continue;
-        const id="it"+x.trackId;
-        let t=S.online.find(y=>y.id===id);
-        if(!t){
-          t={id,title:x.trackName,artist:x.artistName,mood:m,bpm:100,energy:en,online:1,full:1,src:platform==="spotify"?"Spotify Match":platform==="ytm"?"YouTube Music":"Apple Music",url:x.previewUrl,art:x.artworkUrl100?x.artworkUrl100.replace("100x100","600x600"):"",dur:Math.round((x.trackTimeMillis||210000)/1000)};
-          S.online.push(t);
-        }
-        if(!o.some(k=>k.title.toLowerCase()===t.title.toLowerCase()))o.push(t);
+      const list=(j.data&&j.data.results)||j.results||[];
+      for(const s of list){
+        const dl=s.downloadUrl||[];
+        const best=dl[dl.length-1];
+        const u=best&&(best.url||best.link);
+        const dur=Number(s.duration)||0;
+        if(!u||dur<45)continue; // Strictly reject anything under 45 seconds!
+        const id="sv"+s.id;
+        const art=(s.image&&s.image[s.image.length-1]&&(s.image[s.image.length-1].url||s.image[s.image.length-1].link))||"";
+        const artist=(s.artists&&s.artists.primary&&s.artists.primary.map(a=>a.name).join(", "))||s.primaryArtists||"Online";
+        let t={id,title:s.name||s.title||term,artist,mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:platform==="spotify"?"Spotify Match":platform==="apple"?"Apple Match":"Full Stream",url:u,art,dur};
+        if(!o.some(x=>x.id===id))o.push(t);
       }
     }catch(e){}
   }
-  // Fast Metadata from Deezer (CORS-free JSONP)
-  if(o.length<n&&(platform==="all"||platform==="deezer"||platform==="spotify")){
-    const dz=await deezerJSONP(term,n);
-    for(const x of dz){
-      const id="dz"+x.id;
-      let t=S.online.find(y=>y.id===id);
-      if(!t){
-        t={id,title:x.title,artist:(x.artist&&x.artist.name)||"Deezer",mood:m,bpm:100,energy:en,online:1,full:1,src:platform==="spotify"?"Spotify Match":"Deezer",url:x.preview||"",art:(x.album&&x.album.cover_big)||"",dur:x.duration||210};
-        S.online.push(t);
+
+  // 2. Audius Full-Length Stream API (CORS enabled, full songs)
+  if(o.length<n){
+    try{
+      const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit="+n,{signal:AbortSignal.timeout(5000)});
+      if(r.ok){
+        const j=await r.json();
+        for(const x of j.data||[]){
+          if((x.duration||0)<45)continue; // Strictly reject < 45s
+          const id="au"+x.id;
+          const t={id,title:x.title,artist:(x.user&&x.user.name)||"Audius",mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:"Audius Full",url:"https://discoveryprovider.audius.co/v1/tracks/"+x.id+"/stream",art:(x.artwork&&x.artwork["480x480"])||"",dur:x.duration};
+          if(!o.some(k=>k.id===id))o.push(t);
+        }
       }
-      if(t.url&&!o.some(k=>k.title.toLowerCase()===t.title.toLowerCase()))o.push(t);
-    }
+    }catch(e){}
   }
-  S.online=S.online.slice(-100);save();return o.slice(0,n);
+
+  // 3. Internet Archive Audio Search (Public full-length MP3s, CORS enabled)
+  if(o.length<n){
+    try{
+      const r=await fetch("https://archive.org/advancedsearch.php?q=mediatype:audio+AND+("+q+")&fl[]=identifier,title,creator&rows="+n+"&output=json",{signal:AbortSignal.timeout(5000)});
+      if(r.ok){
+        const j=await r.json();
+        for(const d of (j.response&&j.response.docs)||[]){
+          const mr=await fetch("https://archive.org/metadata/"+d.identifier+"/files",{signal:AbortSignal.timeout(3500)}).catch(()=>null);
+          if(!mr||!mr.ok)continue;
+          const mj=await mr.json();
+          const mp3=(mj.result||[]).find(f=>f.name&&f.name.endsWith(".mp3")&&Number(f.length||0)>45);
+          if(!mp3)continue;
+          const id="ia"+d.identifier;
+          const t={id,title:d.title||term,artist:d.creator||"Archive",mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:"Archive Full",url:"https://archive.org/download/"+d.identifier+"/"+encodeURIComponent(mp3.name),art:"https://archive.org/services/img/"+d.identifier,dur:Math.round(Number(mp3.length)||210)};
+          if(!o.some(k=>k.id===id))o.push(t);
+        }
+      }
+    }catch(e){}
+  }
+
+  for(const t of o){
+    const idx=S.online.findIndex(y=>y.id===t.id);
+    if(idx>=0)S.online[idx]=t;else S.online.push(t);
+  }
+  S.online=S.online.slice(-100);save();
+  return o.slice(0,n);
 }
 
 // Mood & AI Playlist Engines
