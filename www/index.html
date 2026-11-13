@@ -85,7 +85,7 @@ canvas{width:100%;height:150px;background:#0f0f18;border-radius:10px;touch-actio
       <button class="act-pill" id="np-like" data-a="nplike">👍 <span id="np-lktxt">Like</span></button>
       <button class="act-pill" data-a="npdrawer" data-id="lyrics">❞ Lyrics</button>
       <button class="act-pill" data-a="npdrawer" data-id="queue">☰ Up Next</button>
-      <button class="act-pill" data-a="gocue">✂ Cue Mix</button>
+      <button class="act-pill" id="np-save" data-a="npsave">⬇ Save Offline</button><button class="act-pill" data-a="gocue">✂ Cue Mix</button>
     </div>
 
     <div id="np-box"></div>
@@ -113,7 +113,7 @@ canvas{width:100%;height:150px;background:#0f0f18;border-radius:10px;touch-actio
 <nav id="nav"></nav>
 <script>
 const MOODS=["calm","focus","happy","energetic","melancholy","dreamy"],REL={calm:["dreamy","focus"],focus:["calm"],happy:["energetic"],energetic:["happy"],melancholy:["dreamy","calm"],dreamy:["calm","melancholy"]};
-let S={tracks:[],cues:{},def:{fade:4,in:0,out:0,auto:true},liked:[],pls:[],hifi:false,online:[],mix:null},tab="lib",mood="calm",en=.5,ai=[],pv="",sel="",toast="",shuf=false,rep=true,npOpen=false,npDrawer="",seeking=false;
+let S={tracks:[],cues:{},def:{fade:4,in:0,out:0,auto:true},liked:[],pls:[],hifi:false,offlineOnly:false,online:[],mix:null},tab="lib",mood="calm",en=.5,ai=[],pv="",sel="",toast="",shuf=false,rep=true,npOpen=false,npDrawer="",seeking=false;
 try{const x=JSON.parse(localStorage.getItem("dk")||"null");if(x)S={...S,...x}}catch(e){}
 S.tracks=S.tracks.filter(t=>t.file);S.online=S.online||[];S.thr=S.thr||{s:-25,m:-15,e:-28};const save=()=>{try{localStorage.setItem("dk",JSON.stringify(S))}catch(e){}};
 const T=id=>S.tracks.find(t=>t.id===id)||S.online.find(t=>t.id===id),$=s=>document.querySelector(s);
@@ -173,7 +173,7 @@ function ui(){
  $("#np-at").textContent=t?t.title.toUpperCase():"DIKAMOVO";
  $("#np-as").textContent=t?t.artist:"MUSIC STUDIO";
  const img=$("#np-img");if(t&&t.art){img.src=t.art;img.style.display="block"}else{img.style.display="none"}
- const lk=t&&S.liked.includes(t.id);
+ const lk=t&&S.liked.includes(t.id);const sb=$("#np-save");if(sb)sb.style.display=(t&&t.online&&!S.tracks.some(x=>x.key===t.id))?"inline-flex":"none";
  $("#np-like").className="act-pill"+(lk?" on":"");
  $("#np-lktxt").textContent=lk?"Liked":"Like";
  $("#np-shuf").className=shuf?"":"dim";
@@ -222,7 +222,8 @@ document.addEventListener("pointerdown",e=>{if(e.target.id==="wf"){drag=true;e.t
 document.addEventListener("pointermove",e=>{if(drag)setMk(e)});document.addEventListener("pointerup",()=>{if(drag){drag=false;save()}});
 
 let busy="";const setBusy=x=>{busy=x;const e=$("#st");if(e)e.textContent=x};
-async function search(term,n,m,en){try{const r=await fetch("https://itunes.apple.com/search?media=music&limit="+n+"&term="+encodeURIComponent(term)),j=await r.json(),o=[];
+async function saveOffline(id){const t=S.online.find(x=>x.id===id);if(!t)return;toast="Downloading "+t.title+"…";ui();view();try{const r=await fetch(t.url);const b=await r.blob();const nid="f"+Date.now();await idb("put",nid,b);S.tracks.push({id:nid,key:t.id,title:t.title,artist:t.artist,mood:t.mood,energy:t.energy,bpm:t.bpm,art:t.art||"",file:1,dur:t.dur||30});save();toast="Saved offline: "+t.title;ui();view()}catch(e){toast="Download failed (CORS/network).";ui();view()}}
+async function search(term,n,m,en){if(S.offlineOnly)return[];try{const r=await fetch("https://itunes.apple.com/search?media=music&limit="+n+"&term="+encodeURIComponent(term)),j=await r.json(),o=[];
  for(const x of j.results||[]){if(!x.previewUrl)continue;const id="o"+x.trackId;let t=S.online.find(y=>y.id===id);if(!t){t={id,title:x.trackName,artist:x.artistName,mood:m,bpm:100,energy:en,online:1,url:x.previewUrl,art:x.artworkUrl100?x.artworkUrl100.replace("100x100","600x600"):"",dur:30};S.online.push(t)}o.push(t)}
  S.online=S.online.slice(-60);save();return o}catch(e){return[]}}
 
@@ -246,7 +247,7 @@ function mixHTML(){if(!S.mix)return"";const a=S.mix.ids.map(T).filter(Boolean);r
 async function boot(){await analyzeMissing();await autoMix()}
 
 // Views
-const row=(t,ids)=>`<div class="row"><button class="ic p" data-a="play" data-ids="${ids}" data-id="${t.id}">▶</button><div class="t"><b>${t.title}</b><small>${t.artist} · ${t.mood} · ${t.bpm} BPM</small></div><span class="badge on">${t.online?"online · 30s":"offline"}</span><button class="ic" data-a="like" data-id="${t.id}">${S.liked.includes(t.id)?"♥":"♡"}</button></div>`;
+const row=(t,ids)=>`<div class="row"><button class="ic p" data-a="play" data-ids="${ids}" data-id="${t.id}">▶</button><div class="t"><b>${t.title}</b><small>${t.artist} · ${t.mood} · ${t.bpm} BPM</small></div>${t.online?`<button class="badge on" data-a="saveon" data-id="${t.id}">⬇ Save</button>`:`<span class="badge on">offline</span>`}<button class="ic" data-a="like" data-id="${t.id}">${S.liked.includes(t.id)?"♥":"♡"}</button></div>`;
 const list=a=>a.map(t=>row(t,a.map(x=>x.id).join(","))).join("");
 function sl(k,l,min,max,st,v,u){return`<label class="r"><span>${l}</span><span id="o-${k}">${v}${u}</span></label><input type="range" data-k="${k}" min="${min}" max="${max}" step="${st}" value="${v}">`}
 function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
@@ -260,7 +261,7 @@ function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
  ${sl("fi","Fade in",0,10,.5,c.fi||0,"s")}
  <h2>Auto select thresholds (dB)</h2><div class="chips">${[["s","Start"],["m","Mix"],["e","End"]].map(([k,l])=>`<label>${l} <input type="number" data-k="th-${k}" value="${th[k]}" min="-60" max="0" style="width:72px"></label>`).join("")}</div>
  <p class="chips"><button class="p" data-a="auto">Auto select</button><button data-a="prev8">Preview transition</button><button data-a="rst">Apply default</button><button data-a="mkdef">Save as default</button></p>`}
- if(tab==="set")h=`<h2>Audio</h2><div class="row"><div class="t"><b>High-fidelity mode</b><small>${ctx?"Output "+ctx.sampleRate/1000+" kHz":"Requests 96 kHz, no processing"}</small></div><input type="checkbox" data-k="hifi" ${S.hifi?"checked":""}></div>
+ if(tab==="set")h=`<h2>Network</h2><div class="row"><div class="t"><b>Pure offline mode</b><small>Only use saved local tracks in AI Mix &amp; playlists</small></div><input type="checkbox" data-k="offonly" ${S.offlineOnly?"checked":""}></div><h2>Audio</h2><div class="row"><div class="t"><b>High-fidelity mode</b><small>${ctx?"Output "+ctx.sampleRate/1000+" kHz":"Requests 96 kHz, no processing"}</small></div><input type="checkbox" data-k="hifi" ${S.hifi?"checked":""}></div>
  <h2>Default cue settings</h2><div class="row"><div class="t"><b>Auto-apply to every track</b><small>New and imported tracks get these automatically</small></div><input type="checkbox" data-k="auto" ${S.def.auto?"checked":""}></div>${sl("dfade","Crossfade",0,12,.5,S.def.fade,"s")}${sl("din","Cue in",0,20,.5,S.def.in,"s")}${sl("dout","Cue out",0,20,.5,S.def.out,"s")}
  <h2>Device sync code</h2><textarea id="sy" readonly>${btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify({c:S.cues,d:S.def,l:S.liked,p:S.pls}))))}</textarea><p><button data-a="imp">Paste code from another device &amp; apply</button></p>`;
  $("#v").innerHTML=h+(toast?`<p><small>${toast}</small></p>`:"");
@@ -275,6 +276,8 @@ document.addEventListener("click",async e=>{const b=e.target.closest("[data-a]")
  else if(a==="closenp"){npOpen=false;ui();return}
  else if(a==="gocue"){npOpen=false;if(cur)sel=cur.t.id;tab="cue";ui();view();return}
  else if(a==="goai"){npOpen=false;tab="ai";ui();view();return}
+ else if(a==="npsave"){if(cur&&cur.t.online)saveOffline(cur.t.id);return}
+ else if(a==="saveon"){saveOffline(id);return}
  else if(a==="nplike"){if(cur){const tid=cur.t.id;S.liked=S.liked.includes(tid)?S.liked.filter(x=>x!==tid):[...S.liked,tid];save();ui();view()}return}
  else if(a==="npdrawer"){npDrawer=(npDrawer===id?"":id);renderDrawer();return}
  else if(a==="shuf"){shuf=!shuf;ui();return}
@@ -303,6 +306,7 @@ document.addEventListener("input",e=>{const el=e.target,k=el.dataset.k,v=+el.val
  if(["in","out","fade","fi"].includes(k)){S.cues[sel]={...cue(sel),[k]:v};$("#o-"+k).textContent=v+"s";save();view();return}
  if(k==="dfade"||k==="din"||k==="dout"){S.def[k.slice(1)]=v;$("#o-"+k).textContent=v+"s";save();return}
  if(k==="auto"){S.def.auto=el.checked;save()}
+ if(k==="offonly"){S.offlineOnly=el.checked;save();view()}
  if(k==="hifi"){S.hifi=el.checked;playing=false;cur&&cur.stop();cur=null;ctx&&ctx.close();ctx=null;save();ui();view()}});
 
 document.addEventListener("change",e=>{
