@@ -147,7 +147,7 @@ async function play(i,off,openPlayer=false){queue[i]&&(qi=i);const t=T(queue[i])
  const fi=cue(t.id).fi||0;if(fi>0&&off==null){const N=32;e.g.gain.setValueCurveAtTime(Float32Array.from({length:N},(_,k)=>k/(N-1)),C().currentTime,fi)}
  trans=false;playing=true;C();if(openPlayer)npOpen=true;ui()}
 
-async function transition(){if(trans)return;trans=true;const ni=nextIdx();if(ni<0){trans=false;return}const nt=T(queue[ni]),c=C(),f=cue(cur.t.id).fade,e=await load(nt).catch(()=>null),o=cur,w=c.currentTime,N=32;
+async function transition(forceIdx){if(trans)return;trans=true;const ni=typeof forceIdx==="number"?forceIdx:nextIdx();if(ni<0){trans=false;return}const nt=T(queue[ni]),c=C(),f=cue(cur.t.id).fade,e=await load(nt).catch(()=>null),o=cur,w=c.currentTime,N=32;
  const up=Float32Array.from({length:N},(_,k)=>Math.sin(k/(N-1)*Math.PI/2)),dn=up.slice().reverse();
  if(!e){qi=ni;trans=false;return}e.start(cue(nt.id).in);cur=e;qi=ni;
  if(f>0){e.g.gain.setValueCurveAtTime(up,w,f);o.g.gain.setValueCurveAtTime(dn,w,f)}else o.g.gain.value=0;
@@ -279,9 +279,9 @@ document.addEventListener("click",async e=>{const b=e.target.closest("[data-a]")
  else if(a==="npdrawer"){npDrawer=(npDrawer===id?"":id);renderDrawer();return}
  else if(a==="shuf"){shuf=!shuf;ui();return}
  else if(a==="rep"){rep=!rep;ui();return}
- else if(a==="playq"){play(+id);return}
+ else if(a==="playq"){cur&&playing?transition(+id):play(+id);return}
  else if(a==="play"){const ids=b.dataset.ids.split(",");setQ(ids,ids.indexOf(id),true);return}
- else if(a==="pp"){pp();return}else if(a==="next"){if(queue.length)play(nextIdx());return}else if(a==="prev"){if(queue.length)play((qi-1+queue.length)%queue.length);return}
+ else if(a==="pp"){pp();return}else if(a==="next"){if(queue.length)(cur&&playing?transition():play(nextIdx()));return}else if(a==="prev"){if(queue.length)play((qi-1+queue.length)%queue.length);return}
  else if(a==="like"){S.liked=S.liked.includes(id)?S.liked.filter(x=>x!==id):[...S.liked,id]}
  else if(a==="mood"){mood=id}
  else if(a==="mk"){mk=id}else if(a==="auto"){await autoSel();toast="Markers set from thresholds."}
