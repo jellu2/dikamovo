@@ -115,7 +115,7 @@ canvas{width:100%;height:150px;background:#0f0f18;border-radius:10px;touch-actio
 const MOODS=["calm","focus","happy","energetic","melancholy","dreamy"],REL={calm:["dreamy","focus"],focus:["calm"],happy:["energetic"],energetic:["happy"],melancholy:["dreamy","calm"],dreamy:["calm","melancholy"]};
 let S={tracks:[],cues:{},def:{fade:4,in:0,out:0,auto:true},liked:[],pls:[],hifi:false,offlineOnly:false,online:[],mix:null},tab="lib",mood="calm",en=.5,ai=[],pv="",sel="",toast="",shuf=false,rep=true,npOpen=false,npDrawer="",seeking=false;
 try{const x=JSON.parse(localStorage.getItem("dk")||"null");if(x)S={...S,...x}}catch(e){}
-S.tracks=S.tracks.filter(t=>t.file);S.online=S.online||[];S.thr=S.thr||{s:-25,m:-15,e:-28};const save=()=>{try{localStorage.setItem("dk",JSON.stringify(S))}catch(e){}};
+S.tracks=S.tracks.filter(t=>t.file);S.online=(S.online||[]).filter(x=>x.full);S.thr=S.thr||{s:-25,m:-15,e:-28};const save=()=>{try{localStorage.setItem("dk",JSON.stringify(S))}catch(e){}};
 const T=id=>S.tracks.find(t=>t.id===id)||S.online.find(t=>t.id===id),$=s=>document.querySelector(s);
 const cue=id=>({...(S.def.auto?{in:S.def.in,out:S.def.out,fade:S.def.fade}:{in:0,out:0,fade:0}),...(S.cues[id]||{})});
 const fmt=s=>!isFinite(s)||s<0?"0:00":Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0");
@@ -223,9 +223,62 @@ document.addEventListener("pointermove",e=>{if(drag)setMk(e)});document.addEvent
 
 let busy="";const setBusy=x=>{busy=x;const e=$("#st");if(e)e.textContent=x};
 async function saveOffline(id){const t=S.online.find(x=>x.id===id);if(!t)return;toast="Downloading "+t.title+"…";ui();view();try{const r=await fetch(t.url);const b=await r.blob();const nid="f"+Date.now();await idb("put",nid,b);S.tracks.push({id:nid,key:t.id,title:t.title,artist:t.artist,mood:t.mood,energy:t.energy,bpm:t.bpm,art:t.art||"",file:1,dur:t.dur||30});save();toast="Saved offline: "+t.title;ui();view()}catch(e){toast="Download failed (CORS/network).";ui();view()}}
-async function search(term,n,m,en){if(S.offlineOnly)return[];try{const r=await fetch("https://itunes.apple.com/search?media=music&limit="+n+"&term="+encodeURIComponent(term)),j=await r.json(),o=[];
- for(const x of j.results||[]){if(!x.previewUrl)continue;const id="o"+x.trackId;let t=S.online.find(y=>y.id===id);if(!t){t={id,title:x.trackName,artist:x.artistName,mood:m,bpm:100,energy:en,online:1,url:x.previewUrl,art:x.artworkUrl100?x.artworkUrl100.replace("100x100","600x600"):"",dur:30};S.online.push(t)}o.push(t)}
- S.online=S.online.slice(-60);save();return o}catch(e){return[]}}
+async function getFullStream(vid){
+  const inst=["https://pipedapi.kavin.rocks","https://pipedapi.tokhmi.xyz","https://pipedapi.moomoo.me","https://api.piped.yt"];
+  for(const u of inst){
+    try{
+      const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(4500)});
+      if(!r.ok)continue;
+      const j=await r.json();
+      const a=(j.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(j.audioStreams||[])[0];
+      if(a&&a.url)return{url:a.url,dur:j.duration||210,art:j.thumbnailUrl||""};
+    }catch(e){}
+  }
+  return null;
+}
+
+async function search(term,n,m,en){
+  if(S.offlineOnly)return[];
+  const o=[];
+  // 1. Try Piped (YouTube Music full-length tracks)
+  const inst=["https://pipedapi.kavin.rocks","https://pipedapi.tokhmi.xyz","https://pipedapi.moomoo.me","https://api.piped.yt"];
+  for(const u of inst){
+    try{
+      const r=await fetch(u+"/search?q="+encodeURIComponent(term)+"&filter=music_songs",{signal:AbortSignal.timeout(4500)});
+      if(!r.ok)continue;
+      const j=await r.json();
+      for(const x of (j.items||[]).slice(0,n)){
+        const vid=(x.url||"").split("v=")[1];if(!vid)continue;
+        const id="y"+vid;
+        let t=S.online.find(y=>y.id===id);
+        if(!t){
+          const st=await getFullStream(vid);if(!st)continue;
+          t={id,vid,title:x.title||term,artist:x.uploaderName||"Online",mood:m,bpm:100,energy:en,online:1,full:1,url:st.url,art:st.art||x.thumbnail||"",dur:st.dur};
+          S.online.push(t);
+        }
+        o.push(t);
+      }
+      if(o.length)break;
+    }catch(e){}
+  }
+  // 2. Fallback to Audius (Full-length tracks) if Piped is busy
+  if(!o.length){
+    try{
+      const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+encodeURIComponent(term)+"&limit="+n);
+      const j=await r.json();
+      for(const x of j.data||[]){
+        const id="au"+x.id;
+        let t=S.online.find(y=>y.id===id);
+        if(!t){
+          t={id,title:x.title,artist:(x.user&&x.user.name)||"Audius",mood:m,bpm:100,energy:en,online:1,full:1,url:"https://discoveryprovider.audius.co/v1/tracks/"+x.id+"/stream",art:(x.artwork&&x.artwork["480x480"])||"",dur:x.duration||180};
+          S.online.push(t);
+        }
+        o.push(t);
+      }
+    }catch(e){}
+  }
+  S.online=S.online.slice(-60);save();return o;
+}
 
 async function analyze(f){try{if(f.size>30e6)return null;const c=C(),b=await c.decodeAudioData(await f.arrayBuffer()),d=b.getChannelData(0),sr=b.sampleRate,s=Math.floor(Math.max(0,d.length/2-15*sr)),e=Math.min(d.length,s+30*sr);let sum=0,zc=0;
  for(let i=s;i<e;i++){sum+=d[i]*d[i];if(i>s&&(d[i]>0)!==(d[i-1]>0))zc++}const n=e-s,rms=Math.sqrt(sum/n),v=Math.min(1,zc/n*sr/2/4000);
