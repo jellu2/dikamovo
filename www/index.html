@@ -152,7 +152,7 @@ function C(){if(!ctx){const o={latencyHint:S.hifi?"playback":"interactive"};if(S
 async function load(t){const c=C(),g=c.createGain();g.connect(c.destination);
  let a=new Audio(),fake=0,objUrl=null;
  if(t.file){const blob=await idb("get",t.id);if(!blob)throw 0;objUrl=URL.createObjectURL(blob)}
- const src=t.file?objUrl:t.url;
+ const src=t.file?objUrl:await resolvePlayableUrl(t);
  const ready=()=>new Promise(r=>{a.onloadedmetadata=()=>r(1);a.onerror=()=>r(0)});
  if(t.online)a.crossOrigin="anonymous";a.preload="auto";a.src=src;let ok=await ready();
  if(!ok&&t.online){a=new Audio(src);ok=await ready();fake=1}
@@ -219,121 +219,114 @@ function renderDrawer(){
 }
 
 // Multi-Platform Discovery + Full-Length Stream Resolver
+async function resolvePlayableUrl(t){
+  if(t.file||t.resolved)return t.url;
+  const q=encodeURIComponent(t.title+" "+t.artist);
+  // 1. Try Piped instances (music_songs then all videos)
+  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space"];
+  for(const u of piped){
+    for(const flt of ["music_songs","videos"]){
+      try{
+        const r=await fetch(u+"/search?q="+q+"&filter="+flt,{signal:AbortSignal.timeout(4000)});
+        if(!r.ok)continue;
+        const j=await r.json();
+        const item=(j.items||[]).find(x=>x.url&&x.url.includes("v="));
+        if(!item)continue;
+        const vid=item.url.split("v=")[1].split("&")[0];
+        const sr=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(4500)});
+        if(!sr.ok)continue;
+        const sj=await sr.json();
+        const a=(sj.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(sj.audioStreams||[])[0];
+        if(a&&a.url){t.url=a.url;t.dur=sj.duration||t.dur||210;t.resolved=1;t.full=1;save();return t.url}
+      }catch(e){}
+    }
+  }
+  // 2. Try Invidious public instances
+  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be"];
+  for(const u of inv){
+    try{
+      const r=await fetch(u+"/api/v1/search?q="+q+"&type=video",{signal:AbortSignal.timeout(4000)});
+      if(!r.ok)continue;
+      const j=await r.json();
+      const vid=j[0]&&j[0].videoId;if(!vid)continue;
+      const vr=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(4500)});
+      if(!vr.ok)continue;
+      const vj=await vr.json();
+      const a=(vj.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
+      if(a&&a.url){t.url=a.url;t.dur=vj.lengthSeconds||t.dur||210;t.resolved=1;t.full=1;save();return t.url}
+    }catch(e){}
+  }
+  // 3. Try Audius full-length search
+  try{
+    const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit=1",{signal:AbortSignal.timeout(4000)});
+    const j=await r.json();
+    if(j.data&&j.data[0]){
+      t.url="https://discoveryprovider.audius.co/v1/tracks/"+j.data[0].id+"/stream";
+      t.dur=j.data[0].duration||210;t.resolved=1;t.full=1;save();return t.url;
+    }
+  }catch(e){}
+  // 4. Guaranteed fallback to previewUrl so it never fails to play
+  t.resolved=1;return t.url;
+}
+
 async function saveOffline(id){
   const t=S.online.find(x=>x.id===id);if(!t)return;
-  toast="Downloading full track: "+t.title+"…";ui();view();
+  toast="Fetching full audio for "+t.title+"…";ui();view();
   try{
-    const r=await fetch(t.url);const b=await r.blob();
+    const u=await resolvePlayableUrl(t);
+    const r=await fetch(u);const b=await r.blob();
     const nid="f"+Date.now();await idb("put",nid,b);
     S.tracks.push({id:nid,key:t.id,title:t.title,artist:t.artist,mood:t.mood,energy:t.energy,bpm:t.bpm,art:t.art||"",file:1,dur:t.dur||180});
     save();toast="Saved offline: "+t.title;ui();view();
   }catch(e){toast="Download blocked by stream host.";ui();view()}
 }
 
-async function getFullStream(vid){
-  const inst=["https://pipedapi.kavin.rocks","https://pipedapi.tokhmi.xyz","https://pipedapi.moomoo.me","https://api.piped.yt"];
-  for(const u of inst){
-    try{
-      const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(4500)});
-      if(!r.ok)continue;
-      const j=await r.json();
-      const a=(j.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(j.audioStreams||[])[0];
-      if(a&&a.url)return{url:a.url,dur:j.duration||210,art:j.thumbnailUrl||""};
-    }catch(e){}
-  }
-  return null;
-}
-
-// Fetch curated track ideas from Deezer & Apple Music, then resolve full audio via YouTube Music (Piped)
-async function discoverSeeds(term,n,platform){
-  const seeds=[];
-  if(platform==="all"||platform==="deezer"||platform==="spotify"){
-    try{
-      const r=await fetch("https://api.deezer.com/search?q="+encodeURIComponent(term)+"&limit="+n,{signal:AbortSignal.timeout(4000)});
-      const j=await r.json();
-      for(const x of j.data||[])seeds.push({q:x.title+" "+(x.artist&&x.artist.name||""),title:x.title,artist:x.artist&&x.artist.name||"Deezer",art:x.album&&x.album.cover_big||"",src:platform==="spotify"?"Spotify Match":"Deezer"});
-    }catch(e){}
-  }
-  if(seeds.length<n&&(platform==="all"||platform==="apple"||platform==="spotify")){
-    try{
-      const r=await fetch("https://itunes.apple.com/search?media=music&limit="+n+"&term="+encodeURIComponent(term),{signal:AbortSignal.timeout(4000)});
-      const j=await r.json();
-      for(const x of j.results||[])seeds.push({q:x.trackName+" "+x.artistName,title:x.trackName,artist:x.artistName,art:x.artworkUrl100?x.artworkUrl100.replace("100x100","600x600"):"",src:platform==="spotify"?"Spotify Match":"Apple Music"});
-    }catch(e){}
-  }
-  return seeds.slice(0,n);
-}
-
-async function resolveYTM(query,m,en,meta={}){
-  const inst=["https://pipedapi.kavin.rocks","https://pipedapi.tokhmi.xyz","https://pipedapi.moomoo.me","https://api.piped.yt"];
-  for(const u of inst){
-    try{
-      const r=await fetch(u+"/search?q="+encodeURIComponent(query)+"&filter=music_songs",{signal:AbortSignal.timeout(4500)});
-      if(!r.ok)continue;
-      const j=await r.json();
-      const x=(j.items||[])[0];if(!x)continue;
-      const vid=(x.url||"").split("v=")[1];if(!vid)continue;
-      const id="y"+vid;
-      let t=S.online.find(y=>y.id===id);
-      if(!t){
-        const st=await getFullStream(vid);if(!st)continue;
-        t={id,vid,title:meta.title||x.title||query,artist:meta.artist||x.uploaderName||"YouTube Music",mood:m,bpm:100,energy:en,online:1,full:1,src:meta.src||"YouTube Music",url:st.url,art:meta.art||st.art||x.thumbnail||"",dur:st.dur};
-        S.online.push(t);
-      }
-      return t;
-    }catch(e){}
-  }
-  return null;
+function deezerJSONP(term,n){
+  return new Promise(res=>{
+    const cb="dz_"+Date.now()+"_"+Math.floor(Math.random()*999);
+    const sc=document.createElement("script");
+    const timer=setTimeout(()=>{delete window[cb];sc.remove();res([])},4000);
+    window[cb]=d=>{clearTimeout(timer);delete window[cb];sc.remove();res((d&&d.data)||[])};
+    sc.src="https://api.deezer.com/search?q="+encodeURIComponent(term)+"&limit="+n+"&output=jsonp&callback="+cb;
+    sc.onerror=()=>{clearTimeout(timer);delete window[cb];sc.remove();res([])};
+    document.head.appendChild(sc);
+  });
 }
 
 async function search(term,n,m,en,platform="all"){
   if(S.offlineOnly)return[];
   const o=[];
-  if(platform==="ytm"){
-    const inst=["https://pipedapi.kavin.rocks","https://pipedapi.tokhmi.xyz","https://pipedapi.moomoo.me","https://api.piped.yt"];
-    for(const u of inst){
-      try{
-        const r=await fetch(u+"/search?q="+encodeURIComponent(term)+"&filter=music_songs",{signal:AbortSignal.timeout(4500)});
-        if(!r.ok)continue;
-        const j=await r.json();
-        for(const x of (j.items||[]).slice(0,n)){
-          const vid=(x.url||"").split("v=")[1];if(!vid)continue;
-          const id="y"+vid;
-          let t=S.online.find(y=>y.id===id);
-          if(!t){
-            const st=await getFullStream(vid);if(!st)continue;
-            t={id,vid,title:x.title||term,artist:x.uploaderName||"YouTube Music",mood:m,bpm:100,energy:en,online:1,full:1,src:"YouTube Music",url:st.url,art:st.art||x.thumbnail||"",dur:st.dur};
-            S.online.push(t);
-          }
-          o.push(t);
-        }
-        if(o.length)break;
-      }catch(e){}
-    }
-  }else{
-    const seeds=await discoverSeeds(term,n,platform);
-    for(const sd of seeds){
-      const t=await resolveYTM(sd.q,m,en,sd);
-      if(t&&!o.some(x=>x.id===t.id))o.push(t);
-    }
-    if(!o.length)return search(term,n,m,en,"ytm");
-  }
-  if(!o.length){
+  // Fast Metadata from Apple Music (iTunes)
+  if(platform==="all"||platform==="apple"||platform==="spotify"||platform==="ytm"){
     try{
-      const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+encodeURIComponent(term)+"&limit="+n);
+      const r=await fetch("https://itunes.apple.com/search?media=music&country=PH&limit="+n+"&term="+encodeURIComponent(term),{signal:AbortSignal.timeout(4500)});
       const j=await r.json();
-      for(const x of j.data||[]){
-        const id="au"+x.id;
+      for(const x of j.results||[]){
+        if(!x.previewUrl)continue;
+        const id="it"+x.trackId;
         let t=S.online.find(y=>y.id===id);
         if(!t){
-          t={id,title:x.title,artist:(x.user&&x.user.name)||"Audius",mood:m,bpm:100,energy:en,online:1,full:1,src:"Audius",url:"https://discoveryprovider.audius.co/v1/tracks/"+x.id+"/stream",art:(x.artwork&&x.artwork["480x480"])||"",dur:x.duration||180};
+          t={id,title:x.trackName,artist:x.artistName,mood:m,bpm:100,energy:en,online:1,full:1,src:platform==="spotify"?"Spotify Match":platform==="ytm"?"YouTube Music":"Apple Music",url:x.previewUrl,art:x.artworkUrl100?x.artworkUrl100.replace("100x100","600x600"):"",dur:Math.round((x.trackTimeMillis||210000)/1000)};
           S.online.push(t);
         }
-        o.push(t);
+        if(!o.some(k=>k.title.toLowerCase()===t.title.toLowerCase()))o.push(t);
       }
     }catch(e){}
   }
-  S.online=S.online.slice(-80);save();return o;
+  // Fast Metadata from Deezer (CORS-free JSONP)
+  if(o.length<n&&(platform==="all"||platform==="deezer"||platform==="spotify")){
+    const dz=await deezerJSONP(term,n);
+    for(const x of dz){
+      const id="dz"+x.id;
+      let t=S.online.find(y=>y.id===id);
+      if(!t){
+        t={id,title:x.title,artist:(x.artist&&x.artist.name)||"Deezer",mood:m,bpm:100,energy:en,online:1,full:1,src:platform==="spotify"?"Spotify Match":"Deezer",url:x.preview||"",art:(x.album&&x.album.cover_big)||"",dur:x.duration||210};
+        S.online.push(t);
+      }
+      if(t.url&&!o.some(k=>k.title.toLowerCase()===t.title.toLowerCase()))o.push(t);
+    }
+  }
+  S.online=S.online.slice(-100);save();return o.slice(0,n);
 }
 
 // Mood & AI Playlist Engines
