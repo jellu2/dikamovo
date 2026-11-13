@@ -221,10 +221,10 @@ function renderDrawer(){
 // Multi-Platform Discovery + Full-Length Stream Resolver
 async function getYTStream(vid){
   const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space","https://pipedapi.smnz.de"];
-  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be","https://invidious.jing.rocks"];
-  
+  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be","https://invidious.jing.rocks","https://iv.datura.network"];
+
   const tryP = async (u) => {
-    const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(5500)});
+    const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(7000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const a=(j.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(j.audioStreams||[])[0];
@@ -232,15 +232,28 @@ async function getYTStream(vid){
     return {url:a.url,dur:j.duration||210,art:j.thumbnailUrl||""};
   };
   const tryI = async (u) => {
-    const r=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(5500)});
+    const r=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(7000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const a=(j.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
     if(!a||!a.url)throw 0;
     return {url:a.url,dur:j.lengthSeconds||210,art:""};
   };
+  const tryCobalt = async () => {
+    const r=await fetch("https://api.cobalt.tools/",{
+      method:"POST",
+      headers:{"Accept":"application/json","Content-Type":"application/json"},
+      body:JSON.stringify({url:"https://www.youtube.com/watch?v="+vid,downloadMode:"audio",audioFormat:"mp3"}),
+      signal:AbortSignal.timeout(7000)
+    });
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    if(j.url)return {url:j.url,dur:210,art:""};
+    throw 0;
+  };
+
   try{
-    return await Promise.any([...piped.map(tryP),...inv.map(tryI)]);
+    return await Promise.any([...piped.map(tryP),...inv.map(tryI),tryCobalt()]);
   }catch(e){return null}
 }
 
@@ -266,18 +279,48 @@ async function saveOffline(id){
   }catch(e){toast="Download failed: stream busy, try again.";ui();view()}
 }
 
+// Direct YouTube HTML/JSON Search (works via CapacitorHttp native layer)
+async function searchDirectYT(term,n){
+  const r=await fetch("https://www.youtube.com/results?search_query="+encodeURIComponent(term+" song"),{
+    headers:{"User-Agent":"Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"},
+    signal:AbortSignal.timeout(7000)
+  });
+  if(!r.ok)throw 0;
+  const txt=await r.text();
+  const m=txt.match(/var ytInitialData = ({.*?});</script>/);
+  if(!m)throw 0;
+  const data=JSON.parse(m[1]);
+  const out=[];
+  const walk=(obj)=>{
+    if(!obj||typeof obj!=="object"||out.length>=n)return;
+    if(obj.videoRenderer&&obj.videoRenderer.videoId){
+      const v=obj.videoRenderer;
+      const title=(v.title&&v.title.runs&&v.title.runs[0]&&v.title.runs[0].text)||"";
+      const artist=(v.ownerText&&v.ownerText.runs&&v.ownerText.runs[0]&&v.ownerText.runs[0].text)||"YouTube";
+      const durTxt=(v.lengthText&&v.lengthText.simpleText)||"3:30";
+      const pts=durTxt.split(":").map(Number);
+      const dur=pts.length===2?pts[0]*60+pts[1]:210;
+      if(title&&dur>=45&&!out.some(x=>x.vid===v.videoId)){
+        out.push({vid:v.videoId,title,artist,art:"https://i.ytimg.com/vi/"+v.videoId+"/hqdefault.jpg",dur});
+      }
+    }
+    for(const k in obj)walk(obj[k]);
+  };
+  walk(data);
+  if(!out.length)throw 0;
+  return out;
+}
+
 async function search(term,n,m,en,platform="all"){
   if(S.offlineOnly)return[];
-  const q=encodeURIComponent(term+" official audio");
   const qRaw=encodeURIComponent(term);
   const o=[];
 
-  // 1. Parallel YouTube Music / Video Search (Piped + Invidious) - Returns real OPM & International songs
   const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space"];
   const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be"];
 
   const searchP = async (u) => {
-    const r=await fetch(u+"/search?q="+qRaw+"&filter=videos",{signal:AbortSignal.timeout(5500)});
+    const r=await fetch(u+"/search?q="+qRaw+"&filter=videos",{signal:AbortSignal.timeout(6000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const items=(j.items||[]).filter(x=>x.url&&x.url.includes("v=")&&(x.duration||180)>=45);
@@ -292,7 +335,7 @@ async function search(term,n,m,en,platform="all"){
   };
 
   const searchI = async (u) => {
-    const r=await fetch(u+"/api/v1/search?q="+qRaw+"&type=video",{signal:AbortSignal.timeout(5500)});
+    const r=await fetch(u+"/api/v1/search?q="+qRaw+"&type=video",{signal:AbortSignal.timeout(6000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const items=(j||[]).filter(x=>x.videoId&&(x.lengthSeconds||180)>=45);
@@ -307,7 +350,7 @@ async function search(term,n,m,en,platform="all"){
   };
 
   try{
-    const hits = await Promise.any([...piped.map(searchP),...inv.map(searchI)]);
+    const hits = await Promise.any([searchDirectYT(term,n),...piped.map(searchP),...inv.map(searchI)]);
     for(const x of hits.slice(0,n)){
       const id="yt"+x.vid;
       const t={id,vid:x.vid,title:x.title,artist:x.artist,mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:platform==="spotify"?"Spotify Match":platform==="apple"?"Apple Match":"YouTube Full",url:"",art:x.art,dur:x.dur};
@@ -315,8 +358,8 @@ async function search(term,n,m,en,platform="all"){
     }
   }catch(e){}
 
-  // 2. Fallback to Audius (Indie/Remixes, zero Indian Bollywood spam)
-  if(o.length<n){
+  // Fallback to Audius only if YouTube & all mirrors fail
+  if(!o.length){
     try{
       const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+qRaw+"&limit="+n,{signal:AbortSignal.timeout(5000)});
       if(r.ok){

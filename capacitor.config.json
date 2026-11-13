@@ -1,1 +1,10 @@
-{"appId":"com.dikamovo.music","appName":"Dikamovo Music","webDir":"www"}
+{
+  "appId": "com.dikamovo.music",
+  "appName": "Dikamovo Music",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
