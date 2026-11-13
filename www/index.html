@@ -165,7 +165,7 @@ async function load(t){const c=C(),g=c.createGain();g.connect(c.destination);
 
 function nextIdx(){if(!queue.length)return -1;if(shuf&&queue.length>1){let r;do{r=Math.floor(Math.random()*queue.length)}while(r===qi);return r}return(qi+1)%queue.length}
 
-async function play(i,off,openPlayer=false){queue[i]&&(qi=i);const t=T(queue[i]);if(!t)return;trans=true;[cur,...old].forEach(e=>e&&e.stop());old=[];const e=await load(t).catch(()=>null);if(!e){trans=false;return}cur=e;e.start(off??cue(t.id).in);
+async function play(i,off,openPlayer=false){queue[i]&&(qi=i);const t=T(queue[i]);if(!t)return;trans=true;[cur,...old].forEach(e=>e&&e.stop());old=[];const e=await load(t).catch(()=>null);if(!e){trans=false;toast="Stream busy, tap play again.";ui();view();return}cur=e;e.start(off??cue(t.id).in);
  const fi=cue(t.id).fi||0;if(fi>0&&off==null){const N=32;e.g.gain.setValueCurveAtTime(Float32Array.from({length:N},(_,k)=>k/(N-1)),C().currentTime,fi)}
  trans=false;playing=true;C();if(openPlayer)npOpen=true;ui()}
 
@@ -218,7 +218,7 @@ function renderDrawer(){
  }
 }
 
-// Multi-Platform Discovery + Full-Length Stream Resolver
+// Direct YouTube + CapacitorHttp Native Engine
 async function getYTStream(vid){
   const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space","https://pipedapi.smnz.de"];
   const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be","https://invidious.jing.rocks","https://iv.datura.network"];
@@ -279,7 +279,6 @@ async function saveOffline(id){
   }catch(e){toast="Download failed: stream busy, try again.";ui();view()}
 }
 
-// Direct YouTube HTML/JSON Search (works via CapacitorHttp native layer)
 async function searchDirectYT(term,n){
   const r=await fetch("https://www.youtube.com/results?search_query="+encodeURIComponent(term+" song"),{
     headers:{"User-Agent":"Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"},
@@ -287,9 +286,12 @@ async function searchDirectYT(term,n){
   });
   if(!r.ok)throw 0;
   const txt=await r.text();
-  const m=txt.match(/var ytInitialData = ({.*?});</script>/);
-  if(!m)throw 0;
-  const data=JSON.parse(m[1]);
+  const marker="var ytInitialData = ";
+  const sIdx=txt.indexOf(marker);
+  if(sIdx<0)throw 0;
+  const eIdx=txt.indexOf(";</"+"script>",sIdx);
+  if(eIdx<0)throw 0;
+  const data=JSON.parse(txt.slice(sIdx+marker.length,eIdx));
   const out=[];
   const walk=(obj)=>{
     if(!obj||typeof obj!=="object"||out.length>=n)return;
@@ -358,7 +360,6 @@ async function search(term,n,m,en,platform="all"){
     }
   }catch(e){}
 
-  // Fallback to Audius only if YouTube & all mirrors fail
   if(!o.length){
     try{
       const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+qRaw+"&limit="+n,{signal:AbortSignal.timeout(5000)});
