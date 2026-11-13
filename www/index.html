@@ -220,53 +220,64 @@ function renderDrawer(){
 
 // Multi-Platform Discovery + Full-Length Stream Resolver
 async function resolvePlayableUrl(t){
-  if(t.file||t.resolved)return t.url;
+  if(t.file||t.resolvedFull)return t.url;
   const q=encodeURIComponent(t.title+" "+t.artist);
-  // 1. Try Piped instances (music_songs then all videos)
-  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space"];
-  for(const u of piped){
-    for(const flt of ["music_songs","videos"]){
-      try{
-        const r=await fetch(u+"/search?q="+q+"&filter="+flt,{signal:AbortSignal.timeout(4000)});
-        if(!r.ok)continue;
-        const j=await r.json();
-        const item=(j.items||[]).find(x=>x.url&&x.url.includes("v="));
-        if(!item)continue;
-        const vid=item.url.split("v=")[1].split("&")[0];
-        const sr=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(4500)});
-        if(!sr.ok)continue;
-        const sj=await sr.json();
-        const a=(sj.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(sj.audioStreams||[])[0];
-        if(a&&a.url){t.url=a.url;t.dur=sj.duration||t.dur||210;t.resolved=1;t.full=1;save();return t.url}
-      }catch(e){}
-    }
-  }
-  // 2. Try Invidious public instances
-  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be"];
-  for(const u of inv){
-    try{
-      const r=await fetch(u+"/api/v1/search?q="+q+"&type=video",{signal:AbortSignal.timeout(4000)});
-      if(!r.ok)continue;
-      const j=await r.json();
-      const vid=j[0]&&j[0].videoId;if(!vid)continue;
-      const vr=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(4500)});
-      if(!vr.ok)continue;
-      const vj=await vr.json();
-      const a=(vj.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
-      if(a&&a.url){t.url=a.url;t.dur=vj.lengthSeconds||t.dur||210;t.resolved=1;t.full=1;save();return t.url}
-    }catch(e){}
-  }
-  // 3. Try Audius full-length search
-  try{
-    const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit=1",{signal:AbortSignal.timeout(4000)});
+  $("#mt").textContent="Loading full track…";
+
+  const tryPiped = async (u, flt) => {
+    const r=await fetch(u+"/search?q="+q+"&filter="+flt,{signal:AbortSignal.timeout(6000)});
+    if(!r.ok)throw 0;
     const j=await r.json();
-    if(j.data&&j.data[0]){
-      t.url="https://discoveryprovider.audius.co/v1/tracks/"+j.data[0].id+"/stream";
-      t.dur=j.data[0].duration||210;t.resolved=1;t.full=1;save();return t.url;
-    }
-  }catch(e){}
-  // 4. Guaranteed fallback to previewUrl so it never fails to play
-  t.resolved=1;return t.url;
+    const item=(j.items||[]).find(x=>x.url&&x.url.includes("v="));
+    if(!item)throw 0;
+    const vid=item.url.split("v=")[1].split("&")[0];
+    const sr=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(6000)});
+    if(!sr.ok)throw 0;
+    const sj=await sr.json();
+    const a=(sj.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(sj.audioStreams||[])[0];
+    if(!a||!a.url)throw 0;
+    return {url:a.url,dur:sj.duration||t.dur||210};
+  };
+
+  const tryInv = async (u) => {
+    const r=await fetch(u+"/api/v1/search?q="+q+"&type=video",{signal:AbortSignal.timeout(6000)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const vid=j[0]&&j[0].videoId;if(!vid)throw 0;
+    const vr=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(6000)});
+    if(!vr.ok)throw 0;
+    const vj=await vr.json();
+    const a=(vj.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
+    if(!a||!a.url)throw 0;
+    return {url:a.url,dur:vj.lengthSeconds||t.dur||210};
+  };
+
+  const tryAudius = async () => {
+    const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit=1",{signal:AbortSignal.timeout(6000)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const d=j.data&&j.data[0];
+    if(!d)throw 0;
+    return {url:"https://discoveryprovider.audius.co/v1/tracks/"+d.id+"/stream",dur:d.duration||210};
+  };
+
+  try{
+    const res = await Promise.any([
+      tryPiped("https://pipedapi.kavin.rocks","music_songs"),
+      tryPiped("https://pipedapi.kavin.rocks","videos"),
+      tryPiped("https://api.piped.yt","videos"),
+      tryPiped("https://pipedapi.adminforge.de","videos"),
+      tryPiped("https://pipedapi.drgns.space","videos"),
+      tryInv("https://inv.nadeko.net"),
+      tryInv("https://invidious.nerdvpn.de"),
+      tryInv("https://yewtu.be"),
+      tryAudius()
+    ]);
+    t.url=res.url;t.dur=res.dur;t.resolvedFull=1;t.full=1;save();
+    return t.url;
+  }catch(e){
+    return t.url;
+  }
 }
 
 async function saveOffline(id){
