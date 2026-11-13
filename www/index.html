@@ -136,7 +136,7 @@ let S={tracks:[],cues:{},def:{fade:4,in:0,out:0,auto:true},liked:[],pls:[],hifi:
     tab="lib",mood="calm",en=.5,ai=[],pv="",aiSrc="all",sq="",sres=[],sel="",toast="",shuf=false,rep=true,npOpen=false,npDrawer="",seeking=false;
 
 try{const x=JSON.parse(localStorage.getItem("dk")||"null");if(x)S={...S,...x}}catch(e){}
-S.tracks=S.tracks.filter(t=>t.file);S.online=(S.online||[]).filter(x=>x.full);S.thr=S.thr||{s:-25,m:-15,e:-28};
+S.tracks=S.tracks.filter(t=>t.file);S.online=(S.online||[]).filter(x=>x.resolvedFull);S.thr=S.thr||{s:-25,m:-15,e:-28};
 const save=()=>{try{localStorage.setItem("dk",JSON.stringify(S))}catch(e){}};
 const T=id=>S.tracks.find(t=>t.id===id)||S.online.find(t=>t.id===id),$=s=>document.querySelector(s);
 const cue=id=>({...(S.def.auto?{in:S.def.in,out:S.def.out,fade:S.def.fade}:{in:0,out:0,fade:0}),...(S.cues[id]||{})});
@@ -224,8 +224,24 @@ async function resolvePlayableUrl(t){
   const q=encodeURIComponent(t.title+" "+t.artist);
   $("#mt").textContent="Loading full track…";
 
-  const tryPiped = async (u, flt) => {
-    const r=await fetch(u+"/search?q="+q+"&filter="+flt,{signal:AbortSignal.timeout(6000)});
+  // 1. Saavn / Music CDN API (Direct full-length MP4/AAC links, no 403 block)
+  const trySaavn = async (base) => {
+    const r=await fetch(base+"/api/search/songs?query="+q+"&limit=3",{signal:AbortSignal.timeout(6000)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const list=(j.data&&j.data.results)||j.results||[];
+    for(const s of list){
+      const dl=s.downloadUrl||[];
+      const best=dl[dl.length-1];
+      const u=best&&(best.url||best.link);
+      if(u)return{url:u,dur:Number(s.duration)||t.dur||210};
+    }
+    throw 0;
+  };
+
+  // 2. Piped with proxy support
+  const tryPiped = async (u) => {
+    const r=await fetch(u+"/search?q="+q+"&filter=videos",{signal:AbortSignal.timeout(6000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const item=(j.items||[]).find(x=>x.url&&x.url.includes("v="));
@@ -234,43 +250,27 @@ async function resolvePlayableUrl(t){
     const sr=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(6000)});
     if(!sr.ok)throw 0;
     const sj=await sr.json();
-    const a=(sj.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(sj.audioStreams||[])[0];
+    const a=(sj.audioStreams||[]).filter(x=>x.url).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
     if(!a||!a.url)throw 0;
-    return {url:a.url,dur:sj.duration||t.dur||210};
+    return{url:a.url,dur:sj.duration||t.dur||210};
   };
 
-  const tryInv = async (u) => {
-    const r=await fetch(u+"/api/v1/search?q="+q+"&type=video",{signal:AbortSignal.timeout(6000)});
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    const vid=j[0]&&j[0].videoId;if(!vid)throw 0;
-    const vr=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(6000)});
-    if(!vr.ok)throw 0;
-    const vj=await vr.json();
-    const a=(vj.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
-    if(!a||!a.url)throw 0;
-    return {url:a.url,dur:vj.lengthSeconds||t.dur||210};
-  };
-
+  // 3. Audius Open Stream
   const tryAudius = async () => {
     const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit=1",{signal:AbortSignal.timeout(6000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const d=j.data&&j.data[0];
     if(!d)throw 0;
-    return {url:"https://discoveryprovider.audius.co/v1/tracks/"+d.id+"/stream",dur:d.duration||210};
+    return{url:"https://discoveryprovider.audius.co/v1/tracks/"+d.id+"/stream",dur:d.duration||210};
   };
 
   try{
     const res = await Promise.any([
-      tryPiped("https://pipedapi.kavin.rocks","music_songs"),
-      tryPiped("https://pipedapi.kavin.rocks","videos"),
-      tryPiped("https://api.piped.yt","videos"),
-      tryPiped("https://pipedapi.adminforge.de","videos"),
-      tryPiped("https://pipedapi.drgns.space","videos"),
-      tryInv("https://inv.nadeko.net"),
-      tryInv("https://invidious.nerdvpn.de"),
-      tryInv("https://yewtu.be"),
+      trySaavn("https://saavn.dev"),
+      trySaavn("https://jiosaavn-api-privatecvc2.vercel.app"),
+      tryPiped("https://pipedapi.kavin.rocks"),
+      tryPiped("https://api.piped.yt"),
       tryAudius()
     ]);
     t.url=res.url;t.dur=res.dur;t.resolvedFull=1;t.full=1;save();
