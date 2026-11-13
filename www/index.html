@@ -219,58 +219,110 @@ function renderDrawer(){
 }
 
 // Multi-Platform Discovery + Full-Length Stream Resolver
+async function getYTStream(vid){
+  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space","https://pipedapi.smnz.de"];
+  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be","https://invidious.jing.rocks"];
+  
+  const tryP = async (u) => {
+    const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(5500)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const a=(j.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(j.audioStreams||[])[0];
+    if(!a||!a.url)throw 0;
+    return {url:a.url,dur:j.duration||210,art:j.thumbnailUrl||""};
+  };
+  const tryI = async (u) => {
+    const r=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(5500)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const a=(j.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
+    if(!a||!a.url)throw 0;
+    return {url:a.url,dur:j.lengthSeconds||210,art:""};
+  };
+  try{
+    return await Promise.any([...piped.map(tryP),...inv.map(tryI)]);
+  }catch(e){return null}
+}
+
 async function resolvePlayableUrl(t){
-  return t.url;
+  if(t.file||t.url)return t.url;
+  if(t.vid){
+    $("#mt").textContent="Loading full audio…";
+    const st=await getYTStream(t.vid);
+    if(st&&st.url){t.url=st.url;t.dur=st.dur;save();return t.url}
+  }
+  throw 0;
 }
 
 async function saveOffline(id){
   const t=S.online.find(x=>x.id===id);if(!t)return;
   toast="Downloading full track: "+t.title+"…";ui();view();
   try{
-    const r=await fetch(t.url);const b=await r.blob();
+    const u=await resolvePlayableUrl(t);
+    const r=await fetch(u);const b=await r.blob();
     const nid="f"+Date.now();await idb("put",nid,b);
     S.tracks.push({id:nid,key:t.id,title:t.title,artist:t.artist,mood:t.mood,energy:t.energy,bpm:t.bpm,art:t.art||"",file:1,dur:t.dur||210});
     save();toast="Saved offline: "+t.title;ui();view();
-  }catch(e){toast="Download failed: "+e.message;ui();view()}
+  }catch(e){toast="Download failed: stream busy, try again.";ui();view()}
 }
 
 async function search(term,n,m,en,platform="all"){
   if(S.offlineOnly)return[];
-  const q=encodeURIComponent(term);
+  const q=encodeURIComponent(term+" official audio");
+  const qRaw=encodeURIComponent(term);
   const o=[];
 
-  // 1. Saavn Full-Length MP4/AAC CDN (Multiple mirrors, CORS enabled, full songs)
-  const saavnMirrors=["https://saavn.dev","https://jiosaavn-api-privatecvc2.vercel.app","https://saavn.sumit.co"];
-  for(const base of saavnMirrors){
-    if(o.length>=n)break;
-    try{
-      const r=await fetch(base+"/api/search/songs?query="+q+"&limit="+n,{signal:AbortSignal.timeout(5000)});
-      if(!r.ok)continue;
-      const j=await r.json();
-      const list=(j.data&&j.data.results)||j.results||[];
-      for(const s of list){
-        const dl=s.downloadUrl||[];
-        const best=dl[dl.length-1];
-        const u=best&&(best.url||best.link);
-        const dur=Number(s.duration)||0;
-        if(!u||dur<45)continue; // Strictly reject anything under 45 seconds!
-        const id="sv"+s.id;
-        const art=(s.image&&s.image[s.image.length-1]&&(s.image[s.image.length-1].url||s.image[s.image.length-1].link))||"";
-        const artist=(s.artists&&s.artists.primary&&s.artists.primary.map(a=>a.name).join(", "))||s.primaryArtists||"Online";
-        let t={id,title:s.name||s.title||term,artist,mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:platform==="spotify"?"Spotify Match":platform==="apple"?"Apple Match":"Full Stream",url:u,art,dur};
-        if(!o.some(x=>x.id===id))o.push(t);
-      }
-    }catch(e){}
-  }
+  // 1. Parallel YouTube Music / Video Search (Piped + Invidious) - Returns real OPM & International songs
+  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space"];
+  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be"];
 
-  // 2. Audius Full-Length Stream API (CORS enabled, full songs)
+  const searchP = async (u) => {
+    const r=await fetch(u+"/search?q="+qRaw+"&filter=videos",{signal:AbortSignal.timeout(5500)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const items=(j.items||[]).filter(x=>x.url&&x.url.includes("v=")&&(x.duration||180)>=45);
+    if(!items.length)throw 0;
+    return items.map(x=>({
+      vid:x.url.split("v=")[1].split("&")[0],
+      title:x.title,
+      artist:x.uploaderName||"YouTube Music",
+      art:x.thumbnail||"",
+      dur:x.duration||210
+    }));
+  };
+
+  const searchI = async (u) => {
+    const r=await fetch(u+"/api/v1/search?q="+qRaw+"&type=video",{signal:AbortSignal.timeout(5500)});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    const items=(j||[]).filter(x=>x.videoId&&(x.lengthSeconds||180)>=45);
+    if(!items.length)throw 0;
+    return items.map(x=>({
+      vid:x.videoId,
+      title:x.title,
+      artist:x.author||"YouTube Music",
+      art:(x.videoThumbnails&&x.videoThumbnails[0]&&x.videoThumbnails[0].url)||"",
+      dur:x.lengthSeconds||210
+    }));
+  };
+
+  try{
+    const hits = await Promise.any([...piped.map(searchP),...inv.map(searchI)]);
+    for(const x of hits.slice(0,n)){
+      const id="yt"+x.vid;
+      const t={id,vid:x.vid,title:x.title,artist:x.artist,mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:platform==="spotify"?"Spotify Match":platform==="apple"?"Apple Match":"YouTube Full",url:"",art:x.art,dur:x.dur};
+      if(!o.some(k=>k.id===id))o.push(t);
+    }
+  }catch(e){}
+
+  // 2. Fallback to Audius (Indie/Remixes, zero Indian Bollywood spam)
   if(o.length<n){
     try{
-      const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+q+"&limit="+n,{signal:AbortSignal.timeout(5000)});
+      const r=await fetch("https://discoveryprovider.audius.co/v1/tracks/search?query="+qRaw+"&limit="+n,{signal:AbortSignal.timeout(5000)});
       if(r.ok){
         const j=await r.json();
         for(const x of j.data||[]){
-          if((x.duration||0)<45)continue; // Strictly reject < 45s
+          if((x.duration||0)<45)continue;
           const id="au"+x.id;
           const t={id,title:x.title,artist:(x.user&&x.user.name)||"Audius",mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:"Audius Full",url:"https://discoveryprovider.audius.co/v1/tracks/"+x.id+"/stream",art:(x.artwork&&x.artwork["480x480"])||"",dur:x.duration};
           if(!o.some(k=>k.id===id))o.push(t);
@@ -279,29 +331,10 @@ async function search(term,n,m,en,platform="all"){
     }catch(e){}
   }
 
-  // 3. Internet Archive Audio Search (Public full-length MP3s, CORS enabled)
-  if(o.length<n){
-    try{
-      const r=await fetch("https://archive.org/advancedsearch.php?q=mediatype:audio+AND+("+q+")&fl[]=identifier,title,creator&rows="+n+"&output=json",{signal:AbortSignal.timeout(5000)});
-      if(r.ok){
-        const j=await r.json();
-        for(const d of (j.response&&j.response.docs)||[]){
-          const mr=await fetch("https://archive.org/metadata/"+d.identifier+"/files",{signal:AbortSignal.timeout(3500)}).catch(()=>null);
-          if(!mr||!mr.ok)continue;
-          const mj=await mr.json();
-          const mp3=(mj.result||[]).find(f=>f.name&&f.name.endsWith(".mp3")&&Number(f.length||0)>45);
-          if(!mp3)continue;
-          const id="ia"+d.identifier;
-          const t={id,title:d.title||term,artist:d.creator||"Archive",mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:"Archive Full",url:"https://archive.org/download/"+d.identifier+"/"+encodeURIComponent(mp3.name),art:"https://archive.org/services/img/"+d.identifier,dur:Math.round(Number(mp3.length)||210)};
-          if(!o.some(k=>k.id===id))o.push(t);
-        }
-      }
-    }catch(e){}
-  }
-
   for(const t of o){
     const idx=S.online.findIndex(y=>y.id===t.id);
-    if(idx>=0)S.online[idx]=t;else S.online.push(t);
+    if(idx>=0)S.online[idx]={...S.online[idx],...t,url:S.online[idx].url||t.url};
+    else S.online.push(t);
   }
   S.online=S.online.slice(-100);save();
   return o.slice(0,n);
