@@ -218,13 +218,35 @@ function renderDrawer(){
  }
 }
 
-// Direct YouTube + CapacitorHttp Native Engine
+// Direct YouTube Internal API (youtubei/v1) via CapacitorHttp
 async function getYTStream(vid){
-  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space","https://pipedapi.smnz.de"];
-  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be","https://invidious.jing.rocks","https://iv.datura.network"];
+  // 1. Direct YouTube InnerTube Player API (iOS/Android client - returns direct audio stream URL)
+  const clients=[
+    {name:"IOS",ver:"19.29.1",ua:"com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)"},
+    {name:"ANDROID",ver:"19.29.37",ua:"com.google.android.youtube/19.29.37 (Linux; U; Android 13) gzip"}
+  ];
+  for(const cl of clients){
+    try{
+      const r=await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","User-Agent":cl.ua},
+        body:JSON.stringify({videoId:vid,context:{client:{clientName:cl.name,clientVersion:cl.ver,hl:"en",gl:"PH"}}}),
+        signal:AbortSignal.timeout(7000)
+      });
+      if(r.ok){
+        const j=await r.json();
+        const fmts=(j.streamingData&&j.streamingData.adaptiveFormats)||[];
+        const aud=fmts.filter(x=>x.url&&x.mimeType&&x.mimeType.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
+        if(aud&&aud.url)return{url:aud.url,dur:Number(j.videoDetails&&j.videoDetails.lengthSeconds)||210,art:""};
+      }
+    }catch(e){}
+  }
 
+  // 2. Backup Piped & Invidious instances
+  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space"];
+  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be"];
   const tryP = async (u) => {
-    const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(7000)});
+    const r=await fetch(u+"/streams/"+vid,{signal:AbortSignal.timeout(6000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const a=(j.audioStreams||[]).filter(x=>x.url&&x.mimeType&&x.mimeType.includes("mp4")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]||(j.audioStreams||[])[0];
@@ -232,28 +254,15 @@ async function getYTStream(vid){
     return {url:a.url,dur:j.duration||210,art:j.thumbnailUrl||""};
   };
   const tryI = async (u) => {
-    const r=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(7000)});
+    const r=await fetch(u+"/api/v1/videos/"+vid,{signal:AbortSignal.timeout(6000)});
     if(!r.ok)throw 0;
     const j=await r.json();
     const a=(j.adaptiveFormats||[]).filter(x=>x.url&&x.type&&x.type.includes("audio")).sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0];
     if(!a||!a.url)throw 0;
     return {url:a.url,dur:j.lengthSeconds||210,art:""};
   };
-  const tryCobalt = async () => {
-    const r=await fetch("https://api.cobalt.tools/",{
-      method:"POST",
-      headers:{"Accept":"application/json","Content-Type":"application/json"},
-      body:JSON.stringify({url:"https://www.youtube.com/watch?v="+vid,downloadMode:"audio",audioFormat:"mp3"}),
-      signal:AbortSignal.timeout(7000)
-    });
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    if(j.url)return {url:j.url,dur:210,art:""};
-    throw 0;
-  };
-
   try{
-    return await Promise.any([...piped.map(tryP),...inv.map(tryI),tryCobalt()]);
+    return await Promise.any([...piped.map(tryP),...inv.map(tryI)]);
   }catch(e){return null}
 }
 
@@ -279,19 +288,16 @@ async function saveOffline(id){
   }catch(e){toast="Download failed: stream busy, try again.";ui();view()}
 }
 
-async function searchDirectYT(term,n){
-  const r=await fetch("https://www.youtube.com/results?search_query="+encodeURIComponent(term+" song"),{
-    headers:{"User-Agent":"Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"},
+// Direct YouTube InnerTube Search JSON API
+async function searchInnerTube(term,n){
+  const r=await fetch("https://www.youtube.com/youtubei/v1/search?prettyPrint=false",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"},
+    body:JSON.stringify({query:term+" audio",context:{client:{clientName:"WEB",clientVersion:"2.20240530.02.00",hl:"en",gl:"PH"}}}),
     signal:AbortSignal.timeout(7000)
   });
   if(!r.ok)throw 0;
-  const txt=await r.text();
-  const marker="var ytInitialData = ";
-  const sIdx=txt.indexOf(marker);
-  if(sIdx<0)throw 0;
-  const eIdx=txt.indexOf(";</"+"script>",sIdx);
-  if(eIdx<0)throw 0;
-  const data=JSON.parse(txt.slice(sIdx+marker.length,eIdx));
+  const data=await r.json();
   const out=[];
   const walk=(obj)=>{
     if(!obj||typeof obj!=="object"||out.length>=n)return;
@@ -318,41 +324,8 @@ async function search(term,n,m,en,platform="all"){
   const qRaw=encodeURIComponent(term);
   const o=[];
 
-  const piped=["https://pipedapi.kavin.rocks","https://api.piped.yt","https://pipedapi.adminforge.de","https://pipedapi.drgns.space"];
-  const inv=["https://inv.nadeko.net","https://invidious.nerdvpn.de","https://yewtu.be"];
-
-  const searchP = async (u) => {
-    const r=await fetch(u+"/search?q="+qRaw+"&filter=videos",{signal:AbortSignal.timeout(6000)});
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    const items=(j.items||[]).filter(x=>x.url&&x.url.includes("v=")&&(x.duration||180)>=45);
-    if(!items.length)throw 0;
-    return items.map(x=>({
-      vid:x.url.split("v=")[1].split("&")[0],
-      title:x.title,
-      artist:x.uploaderName||"YouTube Music",
-      art:x.thumbnail||"",
-      dur:x.duration||210
-    }));
-  };
-
-  const searchI = async (u) => {
-    const r=await fetch(u+"/api/v1/search?q="+qRaw+"&type=video",{signal:AbortSignal.timeout(6000)});
-    if(!r.ok)throw 0;
-    const j=await r.json();
-    const items=(j||[]).filter(x=>x.videoId&&(x.lengthSeconds||180)>=45);
-    if(!items.length)throw 0;
-    return items.map(x=>({
-      vid:x.videoId,
-      title:x.title,
-      artist:x.author||"YouTube Music",
-      art:(x.videoThumbnails&&x.videoThumbnails[0]&&x.videoThumbnails[0].url)||"",
-      dur:x.lengthSeconds||210
-    }));
-  };
-
   try{
-    const hits = await Promise.any([searchDirectYT(term,n),...piped.map(searchP),...inv.map(searchI)]);
+    const hits = await searchInnerTube(term,n);
     for(const x of hits.slice(0,n)){
       const id="yt"+x.vid;
       const t={id,vid:x.vid,title:x.title,artist:x.artist,mood:m,bpm:100,energy:en,online:1,verifiedFull:1,src:platform==="spotify"?"Spotify Match":platform==="apple"?"Apple Match":"YouTube Full",url:"",art:x.art,dur:x.dur};
