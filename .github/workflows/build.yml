@@ -15,11 +15,25 @@ jobs:
       - run: npm install
       - run: npx cap add android
       - run: npx @capacitor/assets generate --android --iconBackgroundColor '#181726'
-      - name: Fix BridgeWebViewClient & Add Background Audio + Cookies
+      - name: Add Permissions, Cookies & Background Audio
         run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />|' "$MANIFEST"
+          node -e '
+            const fs = require("fs");
+            const mPath = "android/app/src/main/AndroidManifest.xml";
+            let xml = fs.readFileSync(mPath, "utf8");
+            const perms = [
+              "android.permission.WAKE_LOCK",
+              "android.permission.FOREGROUND_SERVICE",
+              "android.permission.READ_EXTERNAL_STORAGE",
+              "android.permission.READ_MEDIA_AUDIO",
+              "android.permission.POST_NOTIFICATIONS"
+            ].map(p => `    <uses-permission android:name="${p}" />`).join("\n");
+            xml = xml.replace(
+              "<uses-permission android:name=\"android.permission.INTERNET\" />",
+              "<uses-permission android:name=\"android.permission.INTERNET\" />\n" + perms
+            );
+            fs.writeFileSync(mPath, xml);
+          '
 
           MAIN_ACT=$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)
           cat << 'JAVA' > "$MAIN_ACT"
@@ -47,7 +61,7 @@ jobs:
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-                  requestAudioPermission();
+                  requestAppPermissions();
                   setupWebViewAndAudio();
               }
 
@@ -69,7 +83,6 @@ jobs:
                       cm.setAcceptCookie(true);
                       cm.setAcceptThirdPartyCookies(wv, true);
 
-                      // Extend Capacitor's BridgeWebViewClient so https://localhost/ keeps working!
                       wv.setWebViewClient(new BridgeWebViewClient(getBridge()) {
                           @Override
                           public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -119,10 +132,15 @@ jobs:
                   super.onDestroy();
               }
 
-              private void requestAudioPermission() {
+              private void requestAppPermissions() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS}, 101);
+                      String[] perms = new String[]{
+                          Manifest.permission.READ_MEDIA_AUDIO,
+                          Manifest.permission.POST_NOTIFICATIONS
+                      };
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED ||
+                          ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, perms, 101);
                       }
                   } else {
                       if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
