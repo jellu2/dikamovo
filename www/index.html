@@ -190,6 +190,7 @@ window.onYouTubeIframeAPIReady=()=>{
     events:{
       onReady:()=>{ytReady=true},
       onStateChange:(e)=>{
+        if(e.data===YT.PlayerState.PAUSED&&playing&&!trans){setTimeout(()=>{if(playing&&ytP&&ytP.playVideo)ytP.playVideo()},120)}
         if(e.data===YT.PlayerState.ENDED&&playing&&!trans){
           if(queue.length>1||rep)transition();else{playing=false;ui()}
         }
@@ -428,6 +429,7 @@ drawVisualizer();
 // Keep YouTube IFrame & MediaSession alive when app is minimized
 Object.defineProperty(document,"hidden",{get:()=>false});
 Object.defineProperty(document,"visibilityState",{get:()=>"visible"});
+["visibilitychange","webkitvisibilitychange","pagehide","blur"].forEach(ev=>window.addEventListener(ev,e=>e.stopImmediatePropagation(),true));
 function updateMediaSession(t){
   if(!("mediaSession" in navigator)||!t)return;
   try{
