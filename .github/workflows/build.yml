@@ -15,7 +15,7 @@ jobs:
       - run: npm install
       - run: npx cap add android
       - run: npx @capacitor/assets generate --android --iconBackgroundColor '#181726'
-      - name: Add Background Playback WebView & WakeLock
+      - name: Add Background Playback, Cookies & Permissions
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />|' "$MANIFEST"
@@ -31,6 +31,7 @@ jobs:
           import android.os.Bundle;
           import android.os.PowerManager;
           import android.view.View;
+          import android.webkit.CookieManager;
           import android.webkit.WebView;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
@@ -55,6 +56,9 @@ jobs:
                       }
                       WebView wv = getBridge().getWebView();
                       wv.getSettings().setMediaPlaybackRequiresUserGesture(false);
+                      CookieManager cm = CookieManager.getInstance();
+                      cm.setAcceptCookie(true);
+                      cm.setAcceptThirdPartyCookies(wv, true);
                   } catch (Exception ignored) {}
               }
 
@@ -62,6 +66,7 @@ jobs:
               public void onPause() {
                   super.onPause();
                   try {
+                      CookieManager.getInstance().flush();
                       WebView wv = getBridge().getWebView();
                       wv.onResume();
                       wv.resumeTimers();
