@@ -314,9 +314,19 @@ function drawVisualizer(){
   if(!npOpen)return;
   const W=npCv.width,H=npCv.height,cx=W/2,cy=H/2;
   npG.clearRect(0,0,W,H);
-  if(analyser&&playing)analyser.getByteFrequencyData(vizData);
-  else if(playing){for(let i=0;i<64;i++)vizData[i]=Math.max(0,110*Math.abs(Math.sin(vizPhase*3+i*0.3)))}
-  else vizData.fill(0);
+  const isOnlineStream = cur && cur.t && (cur.t.vid || cur.t.online);
+  if(analyser && playing && !isOnlineStream){
+    analyser.getByteFrequencyData(vizData);
+  }else if(playing){
+    const bpm = (cur && cur.t && cur.t.bpm) || 118;
+    const beat = Math.pow(Math.abs(Math.sin(vizPhase * (bpm / 38))), 2.2);
+    for(let i=0;i<64;i++){
+      const band = i < 10 ? beat * 235 : (Math.sin(vizPhase*4.5 + i*0.42)*0.5 + 0.5) * (150 + beat*85);
+      vizData[i] = Math.min(255, Math.max(18, band));
+    }
+  }else{
+    vizData.fill(0);
+  }
   if(playing)vizPhase+=0.025;
 
   let bass=0;for(let i=0;i<6;i++)bass+=(vizData[i]||0);
@@ -430,20 +440,44 @@ drawVisualizer();
 Object.defineProperty(document,"hidden",{get:()=>false});
 Object.defineProperty(document,"visibilityState",{get:()=>"visible"});
 ["visibilitychange","webkitvisibilitychange","pagehide","blur"].forEach(ev=>window.addEventListener(ev,e=>e.stopImmediatePropagation(),true));
+let silentOsc=null;
+function ensureMediaFocus(active){
+  try{
+    const c=C();
+    if(active && !silentOsc){
+      const o=c.createOscillator(),g=c.createGain();
+      o.frequency.value=40;g.gain.value=0.00005;
+      o.connect(g);g.connect(c.destination);o.start();
+      silentOsc=o;
+    }else if(!active && silentOsc){
+      silentOsc.stop();silentOsc.disconnect();silentOsc=null;
+    }
+  }catch(e){}
+}
 function updateMediaSession(t){
+  ensureMediaFocus(playing);
   if(!("mediaSession" in navigator)||!t)return;
   try{
     navigator.mediaSession.metadata=new MediaMetadata({
-      title:t.title,artist:t.artist,album:"Dikamovo Music",
-      artwork:[{src:t.art||"logo.png",sizes:"512x512",type:"image/png"}]
+      title:t.title||"Dikamovo Music",
+      artist:t.artist||"Dikamovo Studio",
+      album:S.mix?("Made For You · "+S.mix.m):"Dikamovo Music",
+      artwork:[
+        {src:t.art||"logo.png",sizes:"256x256",type:"image/png"},
+        {src:t.art||"logo.png",sizes:"512x512",type:"image/png"}
+      ]
     });
+    navigator.mediaSession.playbackState=playing?"playing":"paused";
+    if(cur && cur.dur>0 && navigator.mediaSession.setPositionState){
+      navigator.mediaSession.setPositionState({duration:cur.dur,playbackRate:1,position:Math.min(cur.dur,Math.max(0,cur.pos()))});
+    }
     navigator.mediaSession.setActionHandler("play",()=>{if(!playing)pp()});
     navigator.mediaSession.setActionHandler("pause",()=>{if(playing)pp()});
     navigator.mediaSession.setActionHandler("nexttrack",()=>{if(queue.length)(cur&&playing?transition():play(nextIdx()))});
     navigator.mediaSession.setActionHandler("previoustrack",()=>{if(queue.length)play((qi-1+queue.length)%queue.length)});
+    navigator.mediaSession.setActionHandler("seekto",(d)=>{if(cur&&d.seekTime!=null)cur.seek(d.seekTime)});
   }catch(e){}
 }
-
 function ui(){if(cur&&cur.t)updateMediaSession(cur.t);
  const t=cur&&cur.t;
  $("#mt").textContent=t?t.title:"Nothing playing";
