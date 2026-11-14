@@ -848,7 +848,7 @@ function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
  <h2>Auto select thresholds (dB)</h2><div class="chips">${[["s","Start"],["m","Mix"],["e","End"]].map(([k,l])=>`<label>${l} <input type="number" data-k="th-${k}" value="${th[k]}" min="-60" max="0" style="width:72px"></label>`).join("")}</div>
  <p class="chips"><button class="p" data-a="auto">Auto select</button><button data-a="prev8">Preview transition</button><button data-a="rst">Apply default</button><button data-a="mkdef">Save as default</button></p>`}
  if(tab==="set")h=`<h2>YouTube Music &amp; Premium</h2>
-   <div class="row"><div class="t"><b>YouTube Premium Account</b><small>Sign in via Google for ad-free playback</small></div><button class="p" data-a="ytlogin">Sign In</button></div>
+   <div class="row"><div class="t"><b>YouTube Premium Account</b><small>${S.ytSigned?"✓ Google Session Linked (Tap to switch account)":"Sign in via Google inside app for ad-free playback"}</small></div><button class="p" data-a="ytlogin">Sign In</button></div>
    <div class="sbar"><input type="text" id="yt-pl-url" placeholder="Paste YT Music Playlist link (Unlisted/Public)"><button class="p" data-a="impytpl">Import</button></div>
    <h2>Waveform Synchronizer Style</h2>
    <div class="chips">${WF_STYLES.map(w=>`<button class="chip ${S.wfStyle===w.id?"sel":""}" data-a="wfst" data-id="${w.id}">${w.n}</button>`).join("")}</div>
@@ -872,7 +872,7 @@ addEventListener("online",net);addEventListener("offline",net);
 
 document.addEventListener("click",async e=>{const b=e.target.closest("[data-a]");if(!b)return;const a=b.dataset.a,id=b.dataset.id;toast="";
  if(a==="tab"){tab=id}
- else if(a==="ytlogin"){window.open("https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com","_blank");return}
+ else if(a==="ytlogin"){S.ytSigned=true;save();window.location.href="https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com";return}
  else if(a==="impytpl"){const u=$("#yt-pl-url")&&$("#yt-pl-url").value.trim();if(u)importYTPlaylist(u);return}
  else if(a==="impytpl2"){const u=$("#yt-pl-url2")&&$("#yt-pl-url2").value.trim();if(u)importYTPlaylist(u);return}
  else if(a==="autoscan"){const el=document.getElementById("scan-log");if(el)el.textContent="Starting scan…";autoScanDevice(true,false);return}

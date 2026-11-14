@@ -15,7 +15,7 @@ jobs:
       - run: npm install
       - run: npx cap add android
       - run: npx @capacitor/assets generate --android --iconBackgroundColor '#181726'
-      - name: Add Background Playback, Cookies & Permissions
+      - name: Add In-App Google Login WebViewClient, Cookies & Background Playback
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />|' "$MANIFEST"
@@ -32,7 +32,10 @@ jobs:
           import android.os.PowerManager;
           import android.view.View;
           import android.webkit.CookieManager;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
           import android.webkit.WebView;
+          import android.webkit.WebViewClient;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
@@ -44,10 +47,10 @@ jobs:
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   requestAudioPermission();
-                  setupBackgroundAudio();
+                  setupWebViewAndAudio();
               }
 
-              private void setupBackgroundAudio() {
+              private void setupWebViewAndAudio() {
                   try {
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null) {
@@ -55,10 +58,34 @@ jobs:
                           wakeLock.acquire();
                       }
                       WebView wv = getBridge().getWebView();
-                      wv.getSettings().setMediaPlaybackRequiresUserGesture(false);
+                      WebSettings ws = wv.getSettings();
+                      ws.setMediaPlaybackRequiresUserGesture(false);
+                      ws.setDomStorageEnabled(true);
+                      ws.setJavaScriptEnabled(true);
+                      // Standard Chrome Mobile UA so Google Sign-In allows login inside WebView
+                      ws.setUserAgentString("Mozilla/5.0 (Linux; Android 13; V2317) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36");
+
                       CookieManager cm = CookieManager.getInstance();
                       cm.setAcceptCookie(true);
                       cm.setAcceptThirdPartyCookies(wv, true);
+
+                      wv.setWebViewClient(new WebViewClient() {
+                          @Override
+                          public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                              String url = request.getUrl().toString();
+                              // Once login finishes and redirects to YouTube / YT Music, flush cookies and return to Dikamovo Music
+                              if (url.startsWith("https://music.youtube.com") || url.startsWith("https://m.youtube.com") || url.startsWith("https://www.youtube.com")) {
+                                  CookieManager.getInstance().flush();
+                                  view.loadUrl("http://localhost/");
+                                  return true;
+                              }
+                              // Keep accounts.google.com login pages inside this WebView instead of opening Chrome
+                              if (url.contains("accounts.google.com") || url.contains("google.com")) {
+                                  return false;
+                              }
+                              return false;
+                          }
+                      });
                   } catch (Exception ignored) {}
               }
 
