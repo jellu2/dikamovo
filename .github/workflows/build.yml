@@ -15,10 +15,10 @@ jobs:
       - run: npm install
       - run: npx cap add android
       - run: npx @capacitor/assets generate --android --iconBackgroundColor '#181726'
-      - name: Add Audio Storage Permissions & Native First-Open Prompt
+      - name: Add Audio Permissions & Keep WebView Playing in Background
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />|' "$MANIFEST"
+          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />|' "$MANIFEST"
 
           MAIN_ACT=$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)
           cat << 'JAVA' > "$MAIN_ACT"
@@ -28,6 +28,8 @@ jobs:
           import android.content.pm.PackageManager;
           import android.os.Build;
           import android.os.Bundle;
+          import android.view.View;
+          import android.webkit.WebView;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
@@ -37,6 +39,24 @@ jobs:
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   requestAudioPermission();
+                  keepWebViewActive();
+              }
+
+              private void keepWebViewActive() {
+                  try {
+                      WebView wv = getBridge().getWebView();
+                      wv.getSettings().setMediaPlaybackRequiresUserGesture(false);
+                  } catch (Exception ignored) {}
+              }
+
+              @Override
+              public void onPause() {
+                  super.onPause();
+                  try {
+                      WebView wv = getBridge().getWebView();
+                      wv.onResume();
+                      wv.resumeTimers();
+                  } catch (Exception ignored) {}
               }
 
               private void requestAudioPermission() {
@@ -52,7 +72,6 @@ jobs:
               }
           }
           JAVA
-          # Siguroha nga tugma ang package name sa capacitor.config.json
           PKG=$(node -e 'console.log(require("./capacitor.config.json").appId)')
           sed -i "s|package com.dikamovo.music;|package $PKG;|" "$MAIN_ACT"
       - run: npx cap sync

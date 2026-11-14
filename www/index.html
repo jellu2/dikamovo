@@ -424,7 +424,25 @@ function drawVisualizer(){
 }
 drawVisualizer();
 
-function ui(){
+
+// Keep YouTube IFrame & MediaSession alive when app is minimized
+Object.defineProperty(document,"hidden",{get:()=>false});
+Object.defineProperty(document,"visibilityState",{get:()=>"visible"});
+function updateMediaSession(t){
+  if(!("mediaSession" in navigator)||!t)return;
+  try{
+    navigator.mediaSession.metadata=new MediaMetadata({
+      title:t.title,artist:t.artist,album:"Dikamovo Music",
+      artwork:[{src:t.art||"logo.png",sizes:"512x512",type:"image/png"}]
+    });
+    navigator.mediaSession.setActionHandler("play",()=>{if(!playing)pp()});
+    navigator.mediaSession.setActionHandler("pause",()=>{if(playing)pp()});
+    navigator.mediaSession.setActionHandler("nexttrack",()=>{if(queue.length)(cur&&playing?transition():play(nextIdx()))});
+    navigator.mediaSession.setActionHandler("previoustrack",()=>{if(queue.length)play((qi-1+queue.length)%queue.length)});
+  }catch(e){}
+}
+
+function ui(){if(cur&&cur.t)updateMediaSession(cur.t);
  const t=cur&&cur.t;
  $("#mt").textContent=t?t.title:"Nothing playing";
  $("#ms").textContent=t?t.artist+" · "+t.mood+(t.src?" · "+t.src:"")+(S.hifi?" · Hi-Fi":""):"";
@@ -578,20 +596,68 @@ async function genAI(p){
 
 // Cue Waveform Editor
 const PK={},r1=x=>Math.round(x*10)/10,f1=x=>fmt(x)+"."+Math.floor(x%1*10);let mk="start",drag=false;
-async function getPeaks(id){if(PK[id])return PK[id];const f=await idb("get",id);if(!f)return null;try{const b=await C().decodeAudioData(await f.arrayBuffer()),d=b.getChannelData(0),N=600,p=new Float32Array(N),z=Math.floor(d.length/N);for(let i=0;i<N;i++){let m=0;for(let j=i*z;j<(i+1)*z;j+=8){const a=Math.abs(d[j]);if(a>m)m=a}p[i]=m}T(id).dur=b.duration;PK[id]={p,d:b.duration};save();return PK[id]}catch(e){return null}}
-function mks(){const c=cue(sel),d=T(sel).dur||60,end=d-c.out;return{start:c.in,end,next:Math.max(c.in,end-c.fade),d}}
-async function drawWF(){const cv=$("#wf");if(!cv)return;const id=sel,g=cv.getContext("2d"),W=cv.width,H=cv.height;g.clearRect(0,0,W,H);g.font="bold 20px system-ui";const k=await getPeaks(id);if(!$("#wf")||id!==sel)return;
- if(!k){g.fillStyle="#9a9aae";g.fillText("Cue markers ready (tap Auto select)",20,H/2);return}
- const m=mks(),x=v=>v/k.d*W,n=k.p.length;g.fillStyle="#8b5cf6";k.p.forEach((v,i)=>{const h=Math.max(2,v*H*.9);g.fillRect(i*W/n,(H-h)/2,Math.max(1,W/n-1),h)});
- g.fillStyle="rgba(0,0,0,.6)";g.fillRect(0,0,x(m.start),H);g.fillRect(x(m.end),0,W-x(m.end),H);g.fillStyle="rgba(34,211,238,.2)";g.fillRect(x(m.next),0,x(m.end)-x(m.next),H);
- [["start","#fb923c","START"],["next","#22d3ee","NEXT"],["end","#ef4444","END"]].forEach(([q,col,lb])=>{g.fillStyle=col;g.fillRect(x(m[q])-(mk===q?3:1),0,mk===q?6:2,H);g.fillText(lb,Math.min(W-75,x(m[q])+6),24);const e=$("#t-"+q);if(e)e.textContent=f1(m[q])})}
-function setMk(ev){const cv=$("#wf"),k=PK[sel];if(!cv||!k)return;const r=cv.getBoundingClientRect(),t=r1(Math.max(0,Math.min(k.d,(ev.clientX-r.left)/r.width*k.d))),c=cue(sel),end=k.d-c.out,n={};
- if(mk==="start")n.in=Math.min(t,end-1);else if(mk==="end"){const e=Math.max(t,c.in+1);n.out=r1(k.d-e);n.fade=Math.min(c.fade,r1(e-c.in))}else n.fade=r1(Math.max(0,Math.min(12,end-Math.max(t,c.in))));
- S.cues[sel]={...c,...n};drawWF()}
-async function autoSel(){const k=await getPeaks(sel);if(!k)return;const th=S.thr,g=d=>10**(d/20),N=k.p.length,last=d=>{for(let i=N-1;i>=0;i--)if(k.p[i]>=g(d))return i;return N-1},s0=Math.max(0,k.p.findIndex(v=>v>=g(th.s))),e0=Math.max(last(th.e)+1,s0+1),n0=Math.min(last(th.m)+1,e0),t=i=>i/N*k.d;
- S.cues[sel]={...cue(sel),in:r1(t(s0)),out:r1(k.d-t(e0)),fade:r1(Math.min(12,t(e0)-t(n0)))}}
+async function getPeaks(id){
+  if(PK[id])return PK[id];
+  const t=T(id);if(!t)return null;
+  let arrBuf=null;
+  try{
+    if(t.fileUri){
+      const src=window.Capacitor?window.Capacitor.convertFileSrc(t.fileUri):t.fileUri;
+      const resp=await fetch(src);
+      if(resp.ok)arrBuf=await resp.arrayBuffer();
+    }else if(t.file){
+      const f=await idb("get",id);
+      if(f)arrBuf=await f.arrayBuffer();
+    }
+    if(arrBuf){
+      const b=await C().decodeAudioData(arrBuf),d=b.getChannelData(0),N=600,p=new Float32Array(N),z=Math.floor(d.length/N);
+      for(let i=0;i<N;i++){let m=0;for(let j=i*z;j<(i+1)*z;j+=8){const a=Math.abs(d[j]);if(a>m)m=a}p[i]=m}
+      t.dur=b.duration;PK[id]={p,d:b.duration};save();return PK[id];
+    }
+  }catch(e){}
+  // Fallback visual envelope for online streams so START/NEXT/END markers remain draggable
+  const N=300,p=new Float32Array(N);
+  for(let i=0;i<N;i++)p[i]=0.35+0.45*Math.abs(Math.sin(i*0.17)+Math.cos(i*0.07))*0.5;
+  PK[id]={p,d:t.dur||180,sim:true};
+  return PK[id];
+}
+function mks(){const c=cue(sel),t=T(sel),d=(t&&t.dur)||60,end=d-c.out;return{start:c.in,end,next:Math.max(c.in,end-c.fade),d}}
+async function drawWF(){
+  const cv=$("#wf");if(!cv)return;
+  const id=sel,g=cv.getContext("2d"),W=cv.width,H=cv.height;
+  g.clearRect(0,0,W,H);g.font="bold 20px system-ui";
+  g.fillStyle="#9a9aae";g.fillText("Loading waveform…",20,H/2);
+  const k=await getPeaks(id);
+  if(!$("#wf")||id!==sel)return;
+  g.clearRect(0,0,W,H);
+  const m=mks(),x=v=>v/k.d*W,n=k.p.length;
+  g.fillStyle=k.sim?"#3b82f6":"#8b5cf6";
+  k.p.forEach((v,i)=>{const h=Math.max(4,v*H*.88);g.fillRect(i*W/n,(H-h)/2,Math.max(1.5,W/n-1),h)});
+  g.fillStyle="rgba(0,0,0,.6)";g.fillRect(0,0,x(m.start),H);g.fillRect(x(m.end),0,W-x(m.end),H);
+  g.fillStyle="rgba(34,211,238,.22)";g.fillRect(x(m.next),0,x(m.end)-x(m.next),H);
+  [["start","#fb923c","START"],["next","#22d3ee","NEXT"],["end","#ef4444","END"]].forEach(([q,col,lb])=>{
+    g.fillStyle=col;g.fillRect(x(m[q])-(mk===q?3:1.5),0,mk===q?6:3,H);
+    g.fillText(lb,Math.min(W-85,Math.max(6,x(m[q])+6)),24);
+    const e=$("#t-"+q);if(e)e.textContent=f1(m[q]);
+  });
+}
+function setMk(ev){
+  const cv=$("#wf"),k=PK[sel];if(!cv||!k)return;
+  const r=cv.getBoundingClientRect(),t=r1(Math.max(0,Math.min(k.d,(ev.clientX-r.left)/r.width*k.d))),c=cue(sel),end=k.d-c.out,n={};
+  if(mk==="start")n.in=Math.min(t,end-1);
+  else if(mk==="end"){const e=Math.max(t,c.in+1);n.out=r1(k.d-e);n.fade=Math.min(c.fade,r1(e-c.in))}
+  else n.fade=r1(Math.max(0,Math.min(12,end-Math.max(t,c.in))));
+  S.cues[sel]={...c,...n};drawWF();
+}
+async function autoSel(){
+  const k=await getPeaks(sel);if(!k)return;
+  const th=S.thr,g=d=>10**(d/20),N=k.p.length,last=d=>{for(let i=N-1;i>=0;i--)if(k.p[i]>=g(d))return i;return N-1};
+  const s0=Math.max(0,k.p.findIndex(v=>v>=g(th.s))),e0=Math.max(last(th.e)+1,s0+1),n0=Math.min(last(th.m)+1,e0),t=i=>i/N*k.d;
+  S.cues[sel]={...cue(sel),in:r1(t(s0)),out:r1(k.d-t(e0)),fade:r1(Math.min(12,t(e0)-t(n0)))};
+}
 document.addEventListener("pointerdown",e=>{if(e.target.id==="wf"){drag=true;e.target.setPointerCapture(e.pointerId);setMk(e)}});
-document.addEventListener("pointermove",e=>{if(drag)setMk(e)});document.addEventListener("pointerup",()=>{if(drag){drag=false;save()}});
+document.addEventListener("pointermove",e=>{if(drag)setMk(e)});
+document.addEventListener("pointerup",()=>{if(drag){drag=false;save()}});
 
 // Auto-Scan Linked Folders (MP3 Only) & Relink Engine
 let busy="";const setBusy=x=>{busy=x;const e=$("#st");if(e)e.textContent=x};
@@ -721,7 +787,7 @@ function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
    ${ai.length?`<h2>Result</h2>${list(ai)}<button data-a="savepl">Save playlist</button>`:""}
    ${S.pls.length?`<h2>Saved</h2>${S.pls.map((p,i)=>`<div class="row"><div class="t"><b>${p.n}</b><small>${p.ids.length} tracks</small></div><button class="ic p" data-a="playpl" data-id="${i}">▶</button></div>`).join("")}`:""}`;
  if(tab==="cue"&&!T(sel))h="<h2>Cue editor</h2><small>Add music in Library first.</small>";
- if(tab==="cue"&&T(sel)){const c=cue(sel),m=mks(),th=S.thr;h=`<h2>Cue editor</h2><select id="ct" style="width:100%">${S.tracks.map(x=>`<option value="${x.id}" ${x.id===sel?"selected":""}>${x.title}</option>`).join("")}</select>
+ if(tab==="cue"&&T(sel)){const c=cue(sel),m=mks(),th=S.thr;h=`<h2>Cue editor</h2><select id="ct" style="width:100%">${[...(cur&&cur.t&&cur.t.online?[cur.t]:[]),...S.tracks].map(x=>`<option value="${x.id}" ${x.id===sel?"selected":""}>${x.title}</option>`).join("")}</select>
  <canvas id="wf" width="720" height="220"></canvas>
  <div class="chips">${[["start","START"],["next","NEXT"],["end","END"]].map(([n,l])=>`<button class="chip ${mk===n?"sel":""}" data-a="mk" data-id="${n}">${l} <b id="t-${n}">${f1(m[n])}</b></button>`).join("")}</div>
  <small>Pick a marker, then tap or drag on the waveform. START = where the song begins, NEXT = when the next song starts mixing in, END = where it stops.</small>
