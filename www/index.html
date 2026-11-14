@@ -427,7 +427,67 @@ async function autoMix(){if(!S.tracks.length)return;const day=new Date().toDateS
  const ids=[];mine.forEach((t,i)=>{ids.push(t.id);if(i%2===1&&on.length)ids.push(on.shift().id)});on.forEach(t=>ids.push(t.id));
  S.mix={day,ids:[...new Set(ids)],m};save();view()}
 function mixHTML(){if(!S.mix)return"";const a=S.mix.ids.map(T).filter(Boolean);return`<h2>Made for you today · ${S.mix.m}</h2>${list(a)}<p><button data-a="mix">Refresh mix</button></p>`}
-async function boot(){await analyzeMissing();await autoMix()}
+
+async function autoScanDevice(manual=false){
+  const cap=window.Capacitor;
+  const FS=cap&&cap.Plugins&&cap.Plugins.Filesystem;
+  if(!FS){if(manual)toast="Auto-scan works inside the installed Android APK.";view();return}
+  try{
+    const perm=await FS.requestPermissions();
+    if(perm&&perm.publicStorage!=="granted"){
+      if(manual){toast="Please allow Storage/Audio permission in phone Settings.";view()}
+      return;
+    }
+    setBusy("Auto-scanning Music folders…");
+    const folders=["Music","Download","Dikamovo"];
+    const exts=/\.(mp3|m4a|wav|ogg|flac|aac)$/i;
+    let added=0;
+
+    async function walkDir(dir){
+      try{
+        const res=await FS.readdir({path:dir,directory:"EXTERNAL_STORAGE"});
+        for(const item of res.files||[]){
+          const name=typeof item==="string"?item:item.name;
+          const type=typeof item==="string"?(name.includes(".")?"file":"directory"):item.type;
+          const fullPath=dir?dir+"/"+name:name;
+          if(type==="directory"){
+            if(!name.startsWith("."))await walkDir(fullPath);
+          }else if(exts.test(name)){
+            const key="cap_"+fullPath;
+            if(S.tracks.some(t=>t.key===key))continue;
+            const fileData=await FS.readFile({path:fullPath,directory:"EXTERNAL_STORAGE"});
+            const bin=atob(fileData.data);
+            const arr=new Uint8Array(bin.length);
+            for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+            const blob=new Blob([arr],{type:"audio/mpeg"});
+            const id="f"+Date.now()+added;
+            const clean=name.replace(/\.[^.]+$/,"");
+            const p=clean.split(" - ");
+            await idb("put",id,blob);
+            S.tracks.push({id,key,title:p.length>1?p.slice(1).join(" - "):clean,artist:p.length>1?p[0]:"Unknown",mood:"calm",energy:.5,bpm:100,file:1,dur:0});
+            added++;
+            setBusy("Auto-imported "+added+" songs…");
+          }
+        }
+      }catch(e){}
+    }
+
+    for(const f of folders)await walkDir(f);
+    setBusy("");
+    if(added>0){
+      save();view();
+      await analyzeMissing();
+      S.mix=null;await autoMix();
+    }else if(manual){
+      toast="All songs in Music & Download are already up to date.";view();
+    }
+  }catch(e){
+    setBusy("");
+    if(manual){toast="Scan error: check app audio permissions.";view()}
+  }
+}
+
+async function boot(){await autoScanDevice(false);await analyzeMissing();await autoMix()}
 
 // Views
 const row=(t,ids)=>`<div class="row"><button class="ic p" data-a="play" data-ids="${ids}" data-id="${t.id}">▶</button><div class="t"><b>${t.title}</b><small>${t.artist} · ${t.mood}${t.src?" · "+t.src:" · "+t.bpm+" BPM"}</small></div>${t.online?`<button class="badge on" data-a="saveon" data-id="${t.id}">⬇ Save</button>`:`<span class="badge on">offline</span>`}<button class="ic" data-a="like" data-id="${t.id}">${S.liked.includes(t.id)?"♥":"♡"}</button></div>`;
@@ -435,7 +495,7 @@ const list=a=>a.map(t=>row(t,a.map(x=>x.id).join(","))).join("");
 function sl(k,l,min,max,st,v,u){return`<label class="r"><span>${l}</span><span id="o-${k}">${v}${u}</span></label><input type="range" data-k="${k}" min="${min}" max="${max}" step="${st}" value="${v}">`}
 
 function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
- if(tab==="lib")h=`<p><label class="p btn">Scan my phone music<input type="file" id="fi" accept="audio/*" multiple hidden></label></p><small id="st">${busy||S.tracks.length+" tracks in your library"}</small>${S.tracks.length?"":"<p><small>Tap Scan, open your Music folder and select all songs. They are saved in the app, so next time it opens with your library ready.</small></p>"}${list(S.tracks)}`;
+ if(tab==="lib")h=`<p class="chips"><button class="p" data-a="autoscan">↻ Auto-Scan Music Folder</button><label class="btn">Pick files manually<input type="file" id="fi" accept="audio/*" multiple hidden></label></p><small id="st">${busy||S.tracks.length+" tracks in your library"}</small>${S.tracks.length?"":"<p><small>Tap Scan, open your Music folder and select all songs. They are saved in the app, so next time it opens with your library ready.</small></p>"}${list(S.tracks)}`;
  if(tab==="srch"){
    const loc=sq?S.tracks.filter(t=>(t.title+" "+t.artist).toLowerCase().includes(sq.toLowerCase())):[];
    h=`<h2>Search Music</h2><div class="sbar"><input type="search" id="sq" placeholder="Song, artist, or OPM hugot…" value="${sq}"><button class="p" data-a="dosrch">Search</button></div>
