@@ -494,6 +494,56 @@ async function saveOffline(id){
   }catch(e){toast="Download failed.";ui();view()}
 }
 
+
+async function importYTPlaylist(rawUrl){
+  const m=rawUrl.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+  if(!m){toast="Invalid YouTube / YT Music playlist link (missing list= ID).";view();return}
+  const listId=m[1];
+  toast="Importing playlist from YouTube Music…";view();
+  try{
+    const r=await fetch("https://www.youtube.com/youtubei/v1/browse?prettyPrint=false",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"},
+      body:JSON.stringify({browseId:"VL"+listId,context:{client:{clientName:"WEB",clientVersion:"2.20240530.02.00",hl:"en",gl:"PH"}}}),
+      signal:AbortSignal.timeout(9000)
+    });
+    if(!r.ok)throw 0;
+    const data=await r.json();
+    let plTitle="YT Music Playlist";
+    try{plTitle=data.header.playlistHeaderRenderer.title.simpleText||plTitle}catch(e){}
+    const imported=[];
+    const walk=(obj)=>{
+      if(!obj||typeof obj!=="object"||imported.length>=60)return;
+      if(obj.playlistVideoRenderer&&obj.playlistVideoRenderer.videoId){
+        const v=obj.playlistVideoRenderer;
+        const title=(v.title&&v.title.runs&&v.title.runs[0]&&v.title.runs[0].text)||"";
+        const artist=(v.shortBylineText&&v.shortBylineText.runs&&v.shortBylineText.runs[0]&&v.shortBylineText.runs[0].text)||"YouTube Music";
+        const dur=Number(v.lengthSeconds)||210;
+        const id="yt"+v.videoId;
+        if(title&&!imported.some(x=>x.id===id)){
+          imported.push({id,vid:v.videoId,title,artist,mood:"calm",bpm:100,energy:.5,online:1,verifiedFull:1,src:"YT Music",url:"",art:"https://i.ytimg.com/vi/"+v.videoId+"/hqdefault.jpg",dur});
+        }
+      }
+      for(const k in obj)walk(obj[k]);
+    };
+    walk(data);
+    if(!imported.length)throw 0;
+    for(const t of imported){
+      const idx=S.online.findIndex(y=>y.id===t.id);
+      if(idx>=0)S.online[idx]={...S.online[idx],...t};
+      else S.online.push(t);
+    }
+    S.online=S.online.slice(-150);
+    S.pls.push({n:plTitle.slice(0,30),ids:imported.map(x=>x.id)});
+    save();
+    toast="Imported "+imported.length+" tracks from "+plTitle+"!";
+    view();
+  }catch(e){
+    toast="Could not load playlist. Make sure playlist is set to Unlisted or Public in YouTube Music.";
+    view();
+  }
+}
+
 async function searchInnerTube(term,n){
   const r=await fetch("https://www.youtube.com/youtubei/v1/search?prettyPrint=false",{
     method:"POST",
@@ -787,7 +837,8 @@ function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
    <textarea id="pr" placeholder="e.g. Sabay Sabay! Chris Brown 2012 party & TikTok PH dance hits, or OPM relapse songs">${pv}</textarea>
    <p><button class="p" data-a="gen">Create playlist</button></p>
    ${ai.length?`<h2>Result</h2>${list(ai)}<button data-a="savepl">Save playlist</button>`:""}
-   ${S.pls.length?`<h2>Saved</h2>${S.pls.map((p,i)=>`<div class="row"><div class="t"><b>${p.n}</b><small>${p.ids.length} tracks</small></div><button class="ic p" data-a="playpl" data-id="${i}">▶</button></div>`).join("")}`:""}`;
+   <div class="sbar" style="margin-top:12px"><input type="text" id="yt-pl-url2" placeholder="Paste YouTube / YT Music Playlist URL…"><button class="p" data-a="impytpl2">Import Playlist</button></div>
+   ${S.pls.length?`<h2>Saved Playlists</h2>${S.pls.map((p,i)=>`<div class="row"><div class="t"><b>${p.n}</b><small>${p.ids.length} tracks</small></div><button class="ic p" data-a="playpl" data-id="${i}">▶</button></div>`).join("")}`:""}`;
  if(tab==="cue"&&!T(sel))h="<h2>Cue editor</h2><small>Add music in Library first.</small>";
  if(tab==="cue"&&T(sel)){const c=cue(sel),m=mks(),th=S.thr;h=`<h2>Cue editor</h2><select id="ct" style="width:100%">${[...(cur&&cur.t&&cur.t.online?[cur.t]:[]),...S.tracks].map(x=>`<option value="${x.id}" ${x.id===sel?"selected":""}>${x.title}</option>`).join("")}</select>
  <canvas id="wf" width="720" height="220"></canvas>
@@ -796,7 +847,10 @@ function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
  ${sl("fi","Fade in",0,10,.5,c.fi||0,"s")}
  <h2>Auto select thresholds (dB)</h2><div class="chips">${[["s","Start"],["m","Mix"],["e","End"]].map(([k,l])=>`<label>${l} <input type="number" data-k="th-${k}" value="${th[k]}" min="-60" max="0" style="width:72px"></label>`).join("")}</div>
  <p class="chips"><button class="p" data-a="auto">Auto select</button><button data-a="prev8">Preview transition</button><button data-a="rst">Apply default</button><button data-a="mkdef">Save as default</button></p>`}
- if(tab==="set")h=`<h2>Waveform Synchronizer Style</h2>
+ if(tab==="set")h=`<h2>YouTube Music &amp; Premium</h2>
+   <div class="row"><div class="t"><b>YouTube Premium Account</b><small>Sign in via Google for ad-free playback</small></div><button class="p" data-a="ytlogin">Sign In</button></div>
+   <div class="sbar"><input type="text" id="yt-pl-url" placeholder="Paste YT Music Playlist link (Unlisted/Public)"><button class="p" data-a="impytpl">Import</button></div>
+   <h2>Waveform Synchronizer Style</h2>
    <div class="chips">${WF_STYLES.map(w=>`<button class="chip ${S.wfStyle===w.id?"sel":""}" data-a="wfst" data-id="${w.id}">${w.n}</button>`).join("")}</div>
    <h2>Equalizer &amp; Presets</h2>
    ${eqHTML()}
@@ -818,6 +872,9 @@ addEventListener("online",net);addEventListener("offline",net);
 
 document.addEventListener("click",async e=>{const b=e.target.closest("[data-a]");if(!b)return;const a=b.dataset.a,id=b.dataset.id;toast="";
  if(a==="tab"){tab=id}
+ else if(a==="ytlogin"){window.open("https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com","_blank");return}
+ else if(a==="impytpl"){const u=$("#yt-pl-url")&&$("#yt-pl-url").value.trim();if(u)importYTPlaylist(u);return}
+ else if(a==="impytpl2"){const u=$("#yt-pl-url2")&&$("#yt-pl-url2").value.trim();if(u)importYTPlaylist(u);return}
  else if(a==="autoscan"){const el=document.getElementById("scan-log");if(el)el.textContent="Starting scan…";autoScanDevice(true,false);return}
  else if(a==="relink"){autoScanDevice(true,true);return}
  else if(a==="adddir"){const inp=$("#new-dir");const v=inp&&inp.value.trim();if(v&&!S.folders.includes(v)){S.folders.push(v);save();view()}return}
