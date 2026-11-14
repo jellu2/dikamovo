@@ -431,59 +431,77 @@ function mixHTML(){if(!S.mix)return"";const a=S.mix.ids.map(T).filter(Boolean);r
 async function autoScanDevice(manual=false){
   const cap=window.Capacitor;
   const FS=cap&&cap.Plugins&&cap.Plugins.Filesystem;
-  if(!FS){toast="Filesystem plugin not loaded.";ui();view();return}
-  try{
-    try{await FS.requestPermissions()}catch(e){}
-    setBusy("Scanning phone storage for music…");toast="Scanning folders…";view();
-    const roots=["Music","Download","Dikamovo","Audio","Documents",""];
-    const exts=/\.(mp3|m4a|wav|ogg|flac|aac|opus)$/i;
-    let added=0,scannedDirs=0;
+  const logBox=(msg)=>{toast=msg;const el=document.getElementById("scan-log");if(el)el.textContent=msg;};
+  if(!FS){logBox("Error: Filesystem plugin missing in build.");return}
 
-    async function walkDir(dir,depth=0){
+  try{
+    logBox("Requesting audio permission…");
+    try{await FS.requestPermissions()}catch(e){}
+
+    const exts=/\.(mp3|m4a|wav|ogg|flac|aac|opus)$/i;
+    const subFolders=["Music","Music/Relapse Music","Music/Best New Tagalog","Music/Hot Hits Philippines","Music/TikTok","Music/tiktok","Music/Viral 50 - Philippines","Music/Tagapag Ligtas","Music/Exercise Music","Music/Recorded_Voices","Music/SoundRecorder","Music/VideoToMP3","Download","Dikamovo","Audio"];
+    let added=0,dirsChecked=0,lastErr="";
+
+    async function scanTarget(targetObj, relPrefix, depth=0){
       if(depth>4)return;
       try{
-        const res=await FS.readdir({path:dir,directory:"EXTERNAL_STORAGE"});
-        scannedDirs++;
+        const res=await FS.readdir(targetObj);
+        dirsChecked++;
         for(const item of res.files||[]){
           const name=typeof item==="string"?item:item.name;
           if(!name||name.startsWith("."))continue;
           const type=typeof item==="string"?(name.includes(".")?"file":"directory"):item.type;
-          const fullPath=dir?dir+"/"+name:name;
+          const nextPath=targetObj.path.endsWith("/")?targetObj.path+name:targetObj.path+"/"+name;
+          const nextObj=targetObj.directory?{path:nextPath,directory:targetObj.directory}:{path:nextPath};
+
           if(type==="directory"){
-            if(dir===""&&!["Music","Download","Dikamovo","Audio","Recordings","Media"].includes(name))continue;
-            await walkDir(fullPath,depth+1);
+            await scanTarget(nextObj, relPrefix+"/"+name, depth+1);
           }else if(exts.test(name)){
-            const key="cap_"+fullPath;
+            const key="cap_"+nextPath;
             if(S.tracks.some(t=>t.key===key))continue;
-            const uriRes=await FS.getUri({path:fullPath,directory:"EXTERNAL_STORAGE"});
+            let fileUri="";
+            if(targetObj.directory){
+              const u=await FS.getUri({path:nextPath,directory:targetObj.directory});
+              fileUri=u.uri;
+            }else{
+              fileUri=nextPath.startsWith("file://")?nextPath:"file://"+nextPath;
+            }
             const id="f"+Date.now()+added;
             const clean=name.replace(/\.[^.]+$/,"");
             const p=clean.split(" - ");
-            S.tracks.push({id,key,title:p.length>1?p.slice(1).join(" - "):clean,artist:p.length>1?p[0]:"Unknown",mood:"calm",energy:.5,bpm:100,file:1,fileUri:uriRes.uri,dur:0});
+            const folderTag=relPrefix.split("/").pop()||"calm";
+            const autoMood=/relapse/i.test(folderTag)?"relapse":"calm";
+            S.tracks.push({id,key,title:p.length>1?p.slice(1).join(" - "):clean,artist:p.length>1?p[0]:"Unknown",mood:autoMood,energy:.5,bpm:100,file:1,fileUri,dur:0});
             added++;
-            setBusy("Found "+added+" songs…");
+            logBox("Found "+added+" songs ("+name+")…");
           }
         }
-      }catch(e){}
+      }catch(e){lastErr=e&&e.message?e.message:String(e)}
     }
 
-    for(const f of roots)await walkDir(f,0);
-    setBusy("");
+    // Method A: Capacitor EXTERNAL_STORAGE directory
+    for(const f of subFolders){
+      await scanTarget({path:f,directory:"EXTERNAL_STORAGE"}, f, 0);
+    }
+
+    // Method B: Direct Android /storage/emulated/0/Music URI fallback (for vivo / Android 13+)
+    if(dirsChecked===0){
+      for(const f of ["Music","Download","Dikamovo"]){
+        await scanTarget({path:"file:///storage/emulated/0/"+f}, f, 0);
+      }
+    }
+
     if(added>0){
-      toast="Added "+added+" new songs!";
       save();view();
+      logBox("Done! Imported "+added+" songs from your phone.");
       S.mix=null;await autoMix();
-    }else if(scannedDirs===0){
-      toast="Permission needed: App Info -> Permissions -> Music and audio -> Allow.";
-      view();
-    }else if(manual){
-      toast="Scan complete ("+scannedDirs+" folders checked). No new songs found.";
-      view();
+    }else if(dirsChecked===0){
+      logBox("Blocked by Android ("+(lastErr||"Permission denied")+"). Open App Info -> Permissions -> Music and audio -> Allow.");
+    }else{
+      logBox("Scan finished ("+dirsChecked+" folders checked). "+S.tracks.length+" songs in library.");
     }
   }catch(e){
-    setBusy("");
-    toast="Scan error: "+(e&&e.message?e.message:"Check storage permission");
-    view();
+    logBox("Scan failed: "+(e&&e.message?e.message:String(e)));
   }
 }
 
@@ -495,7 +513,7 @@ const list=a=>a.map(t=>row(t,a.map(x=>x.id).join(","))).join("");
 function sl(k,l,min,max,st,v,u){return`<label class="r"><span>${l}</span><span id="o-${k}">${v}${u}</span></label><input type="range" data-k="${k}" min="${min}" max="${max}" step="${st}" value="${v}">`}
 
 function view(){let h="";if(!T(sel)&&S.tracks.length)sel=S.tracks[0].id;
- if(tab==="lib")h=`<p class="chips"><button class="p" data-a="autoscan">↻ Auto-Scan Music Folder</button><label class="btn">Pick files manually<input type="file" id="fi" accept="audio/*" multiple hidden></label></p><small id="st">${busy||S.tracks.length+" tracks in your library"}</small>${S.tracks.length?"":"<p><small>Tap Scan, open your Music folder and select all songs. They are saved in the app, so next time it opens with your library ready.</small></p>"}${list(S.tracks)}`;
+ if(tab==="lib")h=`<p class="chips"><button class="p" data-a="autoscan">↻ Auto-Scan Music Folder</button><label class="btn">Pick files manually<input type="file" id="fi" accept="audio/*" multiple hidden></label></p><small id="st">${busy||S.tracks.length+" tracks in your library"}</small><div id="scan-log" style="margin-top:6px;font-size:12px;color:#22d3ee">${toast}</div>${S.tracks.length?"":"<p><small>Tap Scan, open your Music folder and select all songs. They are saved in the app, so next time it opens with your library ready.</small></p>"}${list(S.tracks)}`;
  if(tab==="srch"){
    const loc=sq?S.tracks.filter(t=>(t.title+" "+t.artist).toLowerCase().includes(sq.toLowerCase())):[];
    h=`<h2>Search Music</h2><div class="sbar"><input type="search" id="sq" placeholder="Song, artist, or OPM hugot…" value="${sq}"><button class="p" data-a="dosrch">Search</button></div>
