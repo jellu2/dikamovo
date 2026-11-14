@@ -593,5 +593,6 @@ document.addEventListener("change",e=>{
  if(e.target.id==="np-seek"){if(cur)cur.seek(+e.target.value);seeking=false;return}
  if(e.target.id==="fi")addFiles([...e.target.files])
 });
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&S.tracks.length===0)autoScanDevice(false)});
 net();ui();view();boot();
 </script></body></html>
