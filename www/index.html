@@ -151,7 +151,7 @@ let ctx,cur=null,old=[],queue=[],qi=-1,playing=false,trans=false;
 function C(){if(!ctx){const o={latencyHint:S.hifi?"playback":"interactive"};if(S.hifi)o.sampleRate=96000;try{ctx=new AudioContext(o)}catch(e){ctx=new AudioContext()}}if(ctx.state==="suspended"&&playing)ctx.resume();return ctx}
 async function load(t){const c=C(),g=c.createGain();g.connect(c.destination);
  let a=new Audio(),fake=0,objUrl=null;
- if(t.file){const blob=await idb("get",t.id);if(!blob)throw 0;objUrl=URL.createObjectURL(blob)}
+ if(t.fileUri){objUrl=window.Capacitor?window.Capacitor.convertFileSrc(t.fileUri):t.fileUri}else if(t.file){const blob=await idb("get",t.id);if(!blob)throw 0;objUrl=URL.createObjectURL(blob)}
  const src=t.file?objUrl:await resolvePlayableUrl(t);
  const ready=()=>new Promise(r=>{a.onloadedmetadata=()=>r(1);a.onerror=()=>r(0)});
  if(t.online)a.crossOrigin="anonymous";a.preload="auto";a.src=src;let ok=await ready();
@@ -431,59 +431,59 @@ function mixHTML(){if(!S.mix)return"";const a=S.mix.ids.map(T).filter(Boolean);r
 async function autoScanDevice(manual=false){
   const cap=window.Capacitor;
   const FS=cap&&cap.Plugins&&cap.Plugins.Filesystem;
-  if(!FS){if(manual)toast="Auto-scan works inside the installed Android APK.";view();return}
+  if(!FS){toast="Filesystem plugin not loaded.";ui();view();return}
   try{
-    const perm=await FS.requestPermissions();
-    if(perm&&perm.publicStorage!=="granted"){
-      if(manual){toast="Please allow Storage/Audio permission in phone Settings.";view()}
-      return;
-    }
-    setBusy("Auto-scanning Music folders…");
-    const folders=["Music","Download","Dikamovo"];
-    const exts=/\.(mp3|m4a|wav|ogg|flac|aac)$/i;
-    let added=0;
+    try{await FS.requestPermissions()}catch(e){}
+    setBusy("Scanning phone storage for music…");toast="Scanning folders…";view();
+    const roots=["Music","Download","Dikamovo","Audio","Documents",""];
+    const exts=/\.(mp3|m4a|wav|ogg|flac|aac|opus)$/i;
+    let added=0,scannedDirs=0;
 
-    async function walkDir(dir){
+    async function walkDir(dir,depth=0){
+      if(depth>4)return;
       try{
         const res=await FS.readdir({path:dir,directory:"EXTERNAL_STORAGE"});
+        scannedDirs++;
         for(const item of res.files||[]){
           const name=typeof item==="string"?item:item.name;
+          if(!name||name.startsWith("."))continue;
           const type=typeof item==="string"?(name.includes(".")?"file":"directory"):item.type;
           const fullPath=dir?dir+"/"+name:name;
           if(type==="directory"){
-            if(!name.startsWith("."))await walkDir(fullPath);
+            if(dir===""&&!["Music","Download","Dikamovo","Audio","Recordings","Media"].includes(name))continue;
+            await walkDir(fullPath,depth+1);
           }else if(exts.test(name)){
             const key="cap_"+fullPath;
             if(S.tracks.some(t=>t.key===key))continue;
-            const fileData=await FS.readFile({path:fullPath,directory:"EXTERNAL_STORAGE"});
-            const bin=atob(fileData.data);
-            const arr=new Uint8Array(bin.length);
-            for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
-            const blob=new Blob([arr],{type:"audio/mpeg"});
+            const uriRes=await FS.getUri({path:fullPath,directory:"EXTERNAL_STORAGE"});
             const id="f"+Date.now()+added;
             const clean=name.replace(/\.[^.]+$/,"");
             const p=clean.split(" - ");
-            await idb("put",id,blob);
-            S.tracks.push({id,key,title:p.length>1?p.slice(1).join(" - "):clean,artist:p.length>1?p[0]:"Unknown",mood:"calm",energy:.5,bpm:100,file:1,dur:0});
+            S.tracks.push({id,key,title:p.length>1?p.slice(1).join(" - "):clean,artist:p.length>1?p[0]:"Unknown",mood:"calm",energy:.5,bpm:100,file:1,fileUri:uriRes.uri,dur:0});
             added++;
-            setBusy("Auto-imported "+added+" songs…");
+            setBusy("Found "+added+" songs…");
           }
         }
       }catch(e){}
     }
 
-    for(const f of folders)await walkDir(f);
+    for(const f of roots)await walkDir(f,0);
     setBusy("");
     if(added>0){
+      toast="Added "+added+" new songs!";
       save();view();
-      await analyzeMissing();
       S.mix=null;await autoMix();
+    }else if(scannedDirs===0){
+      toast="Permission needed: App Info -> Permissions -> Music and audio -> Allow.";
+      view();
     }else if(manual){
-      toast="All songs in Music & Download are already up to date.";view();
+      toast="Scan complete ("+scannedDirs+" folders checked). No new songs found.";
+      view();
     }
   }catch(e){
     setBusy("");
-    if(manual){toast="Scan error: check app audio permissions.";view()}
+    toast="Scan error: "+(e&&e.message?e.message:"Check storage permission");
+    view();
   }
 }
 
